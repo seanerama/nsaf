@@ -1,27 +1,36 @@
 import sqlite3
 import os
+import threading
 
-_db = None
+_local = threading.local()
+_db_path = None
 
 
 def get_db(db_path=None):
-    global _db
-    if _db is not None:
-        return _db
-    if db_path is None:
-        db_path = os.environ.get("NSAF_DB_PATH", "./nsaf.db")
-    _db = sqlite3.connect(db_path, timeout=5.0)
-    _db.row_factory = sqlite3.Row
-    _db.execute("PRAGMA journal_mode=WAL")
-    _db.execute("PRAGMA busy_timeout=5000")
-    return _db
+    global _db_path
+    if db_path is not None:
+        _db_path = db_path
+
+    # Check for existing connection on this thread
+    db = getattr(_local, "db", None)
+    if db is not None:
+        return db
+
+    path = _db_path or os.environ.get("NSAF_DB_PATH", "./nsaf.db")
+    _db_path = path
+    db = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA busy_timeout=5000")
+    _local.db = db
+    return db
 
 
 def close_db():
-    global _db
-    if _db is not None:
-        _db.close()
-        _db = None
+    db = getattr(_local, "db", None)
+    if db is not None:
+        db.close()
+        _local.db = None
 
 
 def reset_db(db_path=None):
