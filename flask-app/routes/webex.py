@@ -1,11 +1,8 @@
 """Webex webhook route."""
 
-import hashlib
-import hmac
 import logging
 import os
 
-import requests
 from flask import Blueprint, request, jsonify
 
 import sys
@@ -17,19 +14,20 @@ log = logging.getLogger(__name__)
 
 webex_bp = Blueprint("webex", __name__)
 
+_api = None
 
-def _verify_signature(body, signature):
-    """Verify Webex webhook signature. Rejects if secret is not configured."""
-    secret = os.environ.get("WEBEX_WEBHOOK_SECRET")
-    if not secret:
-        log.warning("WEBEX_WEBHOOK_SECRET not configured — rejecting request")
-        return False
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+
+def _get_api():
+    """Lazy-init WebexTeamsAPI."""
+    global _api
+    if _api is None:
+        from webexteamssdk import WebexTeamsAPI
+        _api = WebexTeamsAPI(access_token=os.environ.get("WEBEX_BOT_TOKEN", ""))
+    return _api
 
 
 def _is_owner(person_id):
-    """Check if the message is from the configured owner. Rejects if not configured."""
+    """Check if the message is from the configured owner."""
     owner_id = os.environ.get("WEBEX_OWNER_PERSON_ID")
     if not owner_id:
         log.warning("WEBEX_OWNER_PERSON_ID not configured — rejecting request")
@@ -37,47 +35,9 @@ def _is_owner(person_id):
     return person_id == owner_id
 
 
-def _get_message_text(message_id):
-    """Fetch the full message text from Webex API."""
-    token = os.environ.get("WEBEX_BOT_TOKEN", "")
-    try:
-        resp = requests.get(
-            f"https://webexapis.com/v1/messages/{message_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("text", "").strip()
-    except Exception as e:
-        log.error(f"Failed to fetch message: {e}")
-        return None
-
-
-def _reply(person_id, text):
-    """Send a reply via Webex."""
-    token = os.environ.get("WEBEX_BOT_TOKEN", "")
-    try:
-        requests.post(
-            "https://webexapis.com/v1/messages",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"toPersonId": person_id, "markdown": text},
-            timeout=10,
-        )
-    except Exception as e:
-        log.error(f"Failed to send reply: {e}")
-
-
 @webex_bp.route("/webex/webhook", methods=["POST"])
 def webhook():
     """Handle incoming Webex webhook."""
-    # Verify signature
-    signature = request.headers.get("X-Spark-Signature", "")
-    if not _verify_signature(request.data, signature):
-        return jsonify({"error": "Invalid signature"}), 403
-
     data = request.json or {}
     resource = data.get("resource")
     event = data.get("event")
@@ -89,18 +49,42 @@ def webhook():
     person_id = message_data.get("personId", "")
     message_id = message_data.get("id", "")
 
+    # Ignore messages from the bot itself
+    api = _get_api()
+    try:
+        bot_info = api.people.me()
+        if person_id == bot_info.id:
+            return jsonify({"status": "ignored"}), 200
+    except Exception:
+        pass
+
     # Check owner restriction
     if not _is_owner(person_id):
         log.warning(f"Unauthorized command attempt from {person_id}")
-        return jsonify({"error": "Unauthorized"}), 403
+        return jsonify({"status": "unauthorized"}), 200
 
-    # Fetch message text
-    text = _get_message_text(message_id)
+    # Fetch full message text
+    try:
+        message = api.messages.get(message_id)
+        text = message.text.strip() if message.text else ""
+    except Exception as e:
+        log.error(f"Failed to fetch message: {e}")
+        return jsonify({"error": "Could not fetch message"}), 200
+
     if not text:
-        return jsonify({"error": "Could not fetch message"}), 500
+        return jsonify({"status": "empty"}), 200
 
     # Handle command
     response = handle_command(text)
-    _reply(person_id, response)
+
+    # Reply
+    try:
+        room_id = message_data.get("roomId", "")
+        if room_id:
+            api.messages.create(roomId=room_id, markdown=response)
+        else:
+            api.messages.create(toPersonId=person_id, markdown=response)
+    except Exception as e:
+        log.error(f"Failed to send reply: {e}")
 
     return jsonify({"status": "ok"}), 200
