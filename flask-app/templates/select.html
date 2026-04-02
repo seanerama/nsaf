@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}NSAF — Select Ideas{% endblock %}
+{% block content %}
+<h1>NSAF Morning Ideas</h1>
+<p class="subtitle">{{ date }} — {{ total }} ideas generated</p>
+
+{% if message %}
+<div class="message">{{ message }}</div>
+{% endif %}
+
+{% if total > 0 %}
+<form method="POST" action="/select">
+    {% for source, label in [("openai", "OpenAI"), ("gemini", "Gemini"), ("anthropic", "Anthropic")] %}
+    {% set ideas = grouped.get(source, []) %}
+    {% if ideas %}
+    <h2>{{ label }} ({{ ideas|length }} ideas)</h2>
+    <div class="card">
+        <table>
+            <tr>
+                <th style="width:40px"></th>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Category</th>
+                <th>Complexity</th>
+            </tr>
+            {% for idea in ideas|sort(attribute='rank') %}
+            <tr>
+                <td><input type="checkbox" name="idea_ids" value="{{ idea.id }}"></td>
+                <td><strong>{{ idea.name }}</strong></td>
+                <td>{{ idea.description }}</td>
+                <td>{{ idea.category }}</td>
+                <td><span class="badge badge-{{ idea.complexity }}">{{ idea.complexity }}</span></td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <div style="margin-top:20px; text-align:right">
+        <button type="submit" class="btn-success">Queue Selected Ideas</button>
+    </div>
+</form>
+{% elif not message %}
+<div class="card">
+    <p>No ideas found for today. Check back after the morning generation runs.</p>
+</div>
+{% endif %}
+{% endblock %}

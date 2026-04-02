@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}NSAF — Review {{ project.slug }}{% endblock %}
+{% block content %}
+<h1>QA Review: {{ project.slug }}</h1>
+<p class="subtitle">Status: {{ project.status }}</p>
+
+{% if message %}
+<div class="message">{{ message }}</div>
+{% endif %}
+
+{% if app_url %}
+<div class="card">
+    <h2>Deployed App</h2>
+    <p><a href="{{ app_url }}" target="_blank" class="btn">Open App →</a></p>
+</div>
+{% endif %}
+
+{% if checklist %}
+<div class="card">
+    <h2>QA Checklist</h2>
+    <table>
+        <tr>
+            <th style="width:40px"></th>
+            <th>Check</th>
+            <th>Type</th>
+        </tr>
+        {% for item in checklist %}
+        <tr>
+            <td>
+                {% if item.auto and item.get('passed', False) %}
+                    <span style="color:green">&#10003;</span>
+                {% elif item.auto %}
+                    <span style="color:red">&#10007;</span>
+                {% else %}
+                    <input type="checkbox" disabled>
+                {% endif %}
+            </td>
+            <td>{{ item.label }}</td>
+            <td>{{ "Automated" if item.auto else "Manual" }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<div style="margin-top:20px; display:flex; gap:12px; justify-content:flex-end">
+    <form method="POST">
+        <input type="hidden" name="action" value="scrap">
+        <button type="submit" class="btn-danger">Scrap</button>
+    </form>
+    <form method="POST">
+        <input type="hidden" name="action" value="promote">
+        <button type="submit" class="btn-success">Promote to Render</button>
+    </form>
+</div>
+{% endif %}
+{% endblock %}
