@@ -3,7 +3,8 @@
 import json
 import logging
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from prompt import build_prompt, DEFAULT_TEMPERATURE
 
@@ -15,10 +16,11 @@ def generate(preferences, history_names, count=10):
     prompt = build_prompt(preferences, history_names, count)
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
+        client = genai.Client()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 temperature=DEFAULT_TEMPERATURE,
                 max_output_tokens=4000,
             ),
