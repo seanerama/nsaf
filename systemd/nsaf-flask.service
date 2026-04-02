@@ -4,13 +4,13 @@ After=network.target
 
 [Service]
 Type=simple
-User=nsaf
-Group=nsaf
-WorkingDirectory=/opt/nsaf
-ExecStart=/opt/nsaf/venv/bin/python flask-app/app.py
+User=NSAF_USER
+Group=NSAF_USER
+WorkingDirectory=NSAF_DIR
+ExecStart=NSAF_DIR/venv/bin/python flask-app/app.py
 Restart=on-failure
 RestartSec=10
-EnvironmentFile=/opt/nsaf/.env
+EnvironmentFile=NSAF_DIR/.env
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nsaf-flask

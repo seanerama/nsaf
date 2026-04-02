@@ -4,13 +4,13 @@ After=network.target postgresql.service
 
 [Service]
 Type=simple
-User=nsaf
-Group=nsaf
-WorkingDirectory=/opt/nsaf
+User=NSAF_USER
+Group=NSAF_USER
+WorkingDirectory=NSAF_DIR
 ExecStart=/usr/bin/node orchestrator/src/index.js
 Restart=on-failure
 RestartSec=10
-EnvironmentFile=/opt/nsaf/.env
+EnvironmentFile=NSAF_DIR/.env
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nsaf-orchestrator

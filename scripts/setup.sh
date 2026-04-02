@@ -83,11 +83,14 @@ echo "  ✓ $PROJECTS_DIR"
 # Install systemd services
 echo ""
 echo "--- Installing systemd services ---"
-sudo cp "$NSAF_DIR/systemd/nsaf-orchestrator.service" /etc/systemd/system/
-sudo cp "$NSAF_DIR/systemd/nsaf-flask.service" /etc/systemd/system/
+CURRENT_USER=$(whoami)
+sed "s|NSAF_USER|$CURRENT_USER|g; s|NSAF_DIR|$NSAF_DIR|g" \
+    "$NSAF_DIR/systemd/nsaf-orchestrator.service" | sudo tee /etc/systemd/system/nsaf-orchestrator.service > /dev/null
+sed "s|NSAF_USER|$CURRENT_USER|g; s|NSAF_DIR|$NSAF_DIR|g" \
+    "$NSAF_DIR/systemd/nsaf-flask.service" | sudo tee /etc/systemd/system/nsaf-flask.service > /dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable nsaf-orchestrator nsaf-flask
-echo "  ✓ Services installed and enabled"
+echo "  ✓ Services installed and enabled (user: $CURRENT_USER, dir: $NSAF_DIR)"
 
 # Set up cron
 echo ""
