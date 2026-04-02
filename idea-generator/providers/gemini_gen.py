@@ -28,6 +28,11 @@ def generate(preferences, history_names, count=10):
                 ),
             )
             text = response.text.strip()
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1]  # remove first line
+                text = text.rsplit("```", 1)[0]  # remove closing fence
+                text = text.strip()
             idea = json.loads(text)
             idea["rank"] = rank
             idea["source"] = "gemini"

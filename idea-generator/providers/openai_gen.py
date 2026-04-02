@@ -27,6 +27,9 @@ def generate(preferences, history_names, count=10):
                 max_tokens=500,
             )
             text = response.choices[0].message.content.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1]
+                text = text.rsplit("```", 1)[0].strip()
             idea = json.loads(text)
             idea["rank"] = rank
             idea["source"] = "openai"

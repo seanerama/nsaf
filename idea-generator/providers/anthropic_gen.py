@@ -27,6 +27,9 @@ def generate(preferences, history_names, count=10):
                 messages=[{"role": "user", "content": prompt}],
             )
             text = response.content[0].text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1]
+                text = text.rsplit("```", 1)[0].strip()
             idea = json.loads(text)
             idea["rank"] = rank
             idea["source"] = "anthropic"
