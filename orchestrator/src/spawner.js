@@ -42,10 +42,16 @@ Now run: /sdd:start --from architect`;
   const logPath = join(dir, 'build.log');
   const logStream = createWriteStream(logPath, { flags: 'a' });
 
+  // Strip API keys so Claude Code uses the subscription, not the API
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.ANTHROPIC_API_KEY;
+  delete cleanEnv.OPENAI_API_KEY;
+  delete cleanEnv.GOOGLE_API_KEY;
+
   const child = spawn(bin, args, {
     cwd: dir,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
+    env: cleanEnv,
   });
 
   child.stdout.pipe(logStream);
