@@ -35,6 +35,7 @@ def handle_command(text):
         "queue": cmd_queue_idea,
         "system": cmd_system,
         "tokens": cmd_tokens,
+        "debug": cmd_debug,
         "help": cmd_help,
     }
 
@@ -252,6 +253,58 @@ def cmd_generate(_arg):
         return f"Failed to start generation: {e}"
 
 
+def cmd_debug(arg):
+    """Spawn a Claude Code session to debug a deployed project."""
+    if not arg:
+        return "Usage: `debug <slug> <description of the problem>`\nExample: `debug learnloop page shows blank white screen`"
+
+    parts = arg.split(None, 1)
+    slug = parts[0]
+    issue = parts[1] if len(parts) > 1 else "The app is not working correctly. Diagnose and fix the issue."
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{slug}` not found at `{project_dir}`."
+
+    deployed_url = project.get("deployed_url", "")
+
+    # Build the debug prompt
+    prompt = (
+        f"You are debugging a deployed web app. The project is at {project_dir}. "
+        f"The app should be running at {deployed_url}. "
+        f"\n\nPROBLEM REPORTED BY USER: {issue}"
+        f"\n\nDiagnose the issue, fix it, and verify the fix. "
+        f"Check logs, test endpoints, read error output. "
+        f"If the app isn't running, start it. "
+        f"If there are code bugs, fix them and restart the app. "
+        f"Report what you found and what you fixed."
+    )
+
+    claude_bin = os.environ.get("NSAF_CLAUDE_COMMAND", "claude").split()[0]
+    debug_log = os.path.join(project_dir, "debug.log")
+
+    try:
+        proc = subprocess.Popen(
+            [claude_bin, "-p", prompt, "--dangerously-skip-permissions"],
+            cwd=project_dir,
+            stdout=open(debug_log, "w"),
+            stderr=subprocess.STDOUT,
+        )
+        return (
+            f"Debug session started for `{slug}` (PID {proc.pid}).\n\n"
+            f"**Issue:** {issue}\n"
+            f"**Log:** `{debug_log}`\n\n"
+            f"Claude is investigating. Check back in a few minutes — "
+            f"the fix will be applied automatically."
+        )
+    except Exception as e:
+        return f"Failed to start debug session: {e}"
+
+
 def cmd_system(_arg):
     """Show system resource usage."""
     lines = ["**Nightshift AutoFoundry — System Status**\n"]
@@ -438,6 +491,9 @@ def cmd_help(_arg):
 - `idea <id>` — Detailed view of an idea
 - `queue <id>` — Add an idea to the build queue
 - `generate` — Trigger new idea generation
+
+**Troubleshooting**
+- `debug <slug> <problem>` — Spawn Claude to diagnose and fix a deployed app
 
 **Monitoring**
 - `system` — CPU, memory, disk, active sessions
