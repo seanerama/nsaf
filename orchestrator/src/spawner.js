@@ -65,11 +65,44 @@ Now run: /sdd:start --from architect`;
 
     log.info({ slug, code, signal }, 'Claude Code session exited');
 
-    if (code === 0) {
-      // Session completed — poller will detect final state
+    // Check if the build actually completed by looking for deployer artifacts
+    let completed = false;
+    try {
+      const statePath = join(dir, 'sdd-output', 'STATE.md');
+      const stateContent = readFileSync(statePath, 'utf-8');
+      if (stateContent.includes('Project Deployer') &&
+          (stateContent.includes('[x] Project Deployer') ||
+           stateContent.match(/completed_roles:.*Project Deployer/))) {
+        completed = true;
+      }
+      // Also check build log for completion markers
+      const buildLog = readFileSync(join(dir, 'build.log'), 'utf-8');
+      if (buildLog.includes('Workflow Complete') || buildLog.includes('workflow complete')) {
+        completed = true;
+      }
+    } catch { /* can't read files */ }
+
+    if (completed) {
+      // Extract URL from build log or use port default
+      let deployedUrl = `http://localhost:${project.port_start}`;
+      try {
+        const buildLog = readFileSync(join(dir, 'build.log'), 'utf-8');
+        const urlMatch = buildLog.match(/http:\/\/localhost:(\d+)/);
+        if (urlMatch) deployedUrl = urlMatch[0];
+      } catch { /* use default */ }
+
+      projectUpdate(slug, {
+        status: 'deployed-local',
+        deployed_url: deployedUrl,
+        completed_at: new Date().toISOString(),
+        last_state_change: new Date().toISOString(),
+      });
+      log.info({ slug, deployedUrl }, 'Build completed successfully');
+    } else if (code === 0) {
+      // Exited clean but no deployer — might be partially done
       projectUpdate(slug, { last_state_change: new Date().toISOString() });
+      log.warn({ slug }, 'Session exited clean but completion not confirmed');
     } else {
-      // Non-zero exit — mark for stall detection
       log.warn({ slug, code }, 'Session exited with error');
     }
   });
