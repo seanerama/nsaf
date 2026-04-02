@@ -1,0 +1,19 @@
+[Unit]
+Description=NSAF Flask App — Webex bot, idea selection UI, QA review
+After=network.target
+
+[Service]
+Type=simple
+User=nsaf
+Group=nsaf
+WorkingDirectory=/opt/nsaf
+ExecStart=/opt/nsaf/venv/bin/python flask-app/app.py
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/opt/nsaf/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nsaf-flask
+
+[Install]
+WantedBy=multi-user.target

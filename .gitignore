@@ -1,2 +1,12 @@
 sdd-output/
 .env
+__pycache__/
+*.pyc
+node_modules/
+nsaf.db
+nsaf.db-wal
+nsaf.db-shm
+venv/
+projects/
+*.log
+.pytest_cache/

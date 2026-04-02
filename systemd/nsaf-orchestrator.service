@@ -1,0 +1,23 @@
+[Unit]
+Description=NSAF Orchestrator — Nightshift AutoFoundry queue and session manager
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nsaf
+Group=nsaf
+WorkingDirectory=/opt/nsaf
+ExecStart=/usr/bin/node orchestrator/src/index.js
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/opt/nsaf/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nsaf-orchestrator
+
+# Graceful shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

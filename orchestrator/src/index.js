@@ -15,6 +15,12 @@ import { allocatePorts, releasePorts } from './ports.js';
 import { createDatabase } from './postgres.js';
 import { scaffoldProject } from './scaffolder.js';
 import { spawnSession, getActiveSessions } from './spawner.js';
+import { pollAllProjects, pollProject } from './poller.js';
+import { checkStalls } from './stall.js';
+import { handleCompletion } from './completion.js';
+import { notifyStall, notifyCompletion } from './notify.js';
+import { compileDigest, sendDigest } from './digest.js';
+import { checkPromotions } from './promotion.js';
 
 const log = pino({ name: 'nsaf.orchestrator' });
 
@@ -30,6 +36,13 @@ const config = {
   pgUser: process.env.POSTGRES_USER || 'nsaf_admin',
   pgPassword: process.env.POSTGRES_PASSWORD || '',
   claudeCommand: process.env.NSAF_CLAUDE_COMMAND || 'claude -p "{prompt}" --dangerously-skip-permissions',
+  stallTimeout: parseInt(process.env.NSAF_STALL_TIMEOUT_MINUTES || '30', 10),
+  pollInterval: parseInt(process.env.NSAF_POLL_INTERVAL_SECONDS || '30', 10) * 1000,
+  webexBotToken: process.env.WEBEX_BOT_TOKEN || '',
+  webexOwnerId: process.env.WEBEX_OWNER_PERSON_ID || '',
+  resendApiKey: process.env.RESEND_API_KEY || '',
+  ownerEmail: process.env.NSAF_OWNER_EMAIL || '',
+  digestHour: parseInt(process.env.NSAF_DIGEST_HOUR || '21', 10),
 };
 
 let running = true;
@@ -84,10 +97,68 @@ async function processQueue() {
   }
 }
 
+let lastPollTime = 0;
+let digestSentToday = false;
+
+async function monitorProjects() {
+  // Poll active projects for state changes
+  const polled = pollAllProjects();
+
+  // Check for completions
+  const building = projectsByStatus('building');
+  for (const project of building) {
+    const statePath = `${project.project_dir}/sdd-output/STATE.md`;
+    try {
+      const result = pollProject(project);
+      if (result && result.complete) {
+        handleCompletion(project, project.port_start);
+        await notifyCompletion(
+          { ...project, deployed_url: `http://localhost:${project.port_start}` },
+          config.webexBotToken,
+          config.webexOwnerId
+        );
+      }
+    } catch { /* already logged by poller */ }
+  }
+
+  // Check for stalls
+  const stalled = checkStalls(config.stallTimeout);
+  for (const project of stalled) {
+    await notifyStall(project, config.webexBotToken, config.webexOwnerId);
+  }
+
+  // Check for promotions
+  checkPromotions(config.claudeCommand);
+
+  // Evening digest
+  const hour = new Date().getHours();
+  if (hour >= config.digestHour && !digestSentToday) {
+    const digest = compileDigest();
+    if (digest.totalAttempted > 0) {
+      await sendDigest(digest, config.resendApiKey, config.ownerEmail);
+    }
+    digestSentToday = true;
+  }
+  if (hour < config.digestHour) {
+    digestSentToday = false;
+  }
+}
+
 function mainLoop() {
+  const now = Date.now();
+
+  // Process queue every cycle
   processQueue().catch(err => {
     log.error({ error: err.message }, 'Queue processing error');
   });
+
+  // Poll/monitor at the polling interval
+  if (now - lastPollTime >= config.pollInterval) {
+    lastPollTime = now;
+    monitorProjects().catch(err => {
+      log.error({ error: err.message }, 'Monitoring error');
+    });
+  }
 
   if (running) {
     loopTimer = setTimeout(mainLoop, config.queuePollInterval);
