@@ -19,19 +19,21 @@ webex_bp = Blueprint("webex", __name__)
 
 
 def _verify_signature(body, signature):
-    """Verify Webex webhook signature."""
-    secret = os.environ.get("WEBEX_WEBHOOK_SECRET", "")
+    """Verify Webex webhook signature. Rejects if secret is not configured."""
+    secret = os.environ.get("WEBEX_WEBHOOK_SECRET")
     if not secret:
-        return True  # No secret configured — skip verification
-    expected = hmac.new(secret.encode(), body, hashlib.sha1).hexdigest()
+        log.warning("WEBEX_WEBHOOK_SECRET not configured — rejecting request")
+        return False
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
 def _is_owner(person_id):
-    """Check if the message is from the configured owner."""
-    owner_id = os.environ.get("WEBEX_OWNER_PERSON_ID", "")
+    """Check if the message is from the configured owner. Rejects if not configured."""
+    owner_id = os.environ.get("WEBEX_OWNER_PERSON_ID")
     if not owner_id:
-        return True  # No owner restriction configured
+        log.warning("WEBEX_OWNER_PERSON_ID not configured — rejecting request")
+        return False
     return person_id == owner_id
 
 

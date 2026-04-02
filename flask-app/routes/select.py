@@ -55,12 +55,12 @@ def submit_selections():
         slug = _slugify(idea["name"])
         project_dir = os.path.join(projects_dir, slug)
 
+        import sqlite3
         try:
             pid = project_create(slug, idea_id, project_dir)
             queue_enqueue(pid)
             created.append(slug)
-        except Exception:
-            # Duplicate slug — append id
+        except sqlite3.IntegrityError:
             slug = f"{slug}-{idea_id}"
             project_dir = os.path.join(projects_dir, slug)
             pid = project_create(slug, idea_id, project_dir)

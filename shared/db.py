@@ -107,9 +107,19 @@ def project_create(slug, idea_id, project_dir):
     return cursor.lastrowid
 
 
+ALLOWED_PROJECT_FIELDS = frozenset({
+    "status", "port_start", "port_end", "db_name", "sdd_phase",
+    "sdd_active_role", "sdd_progress", "deployed_url", "render_url",
+    "last_state_change", "stall_alerted", "started_at", "completed_at",
+})
+
+
 def project_update(slug, **fields):
     if not fields:
         return
+    invalid = set(fields.keys()) - ALLOWED_PROJECT_FIELDS
+    if invalid:
+        raise ValueError(f"Invalid field names: {invalid}")
     db = get_db()
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [slug]

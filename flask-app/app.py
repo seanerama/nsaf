@@ -33,6 +33,14 @@ def init_app():
 init_app()
 
 
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 @app.errorhandler(404)
 def not_found(e):
     return {"error": "Not found"}, 404
@@ -46,4 +54,5 @@ def server_error(e):
 if __name__ == "__main__":
     host = os.environ.get("NSAF_FLASK_HOST", "0.0.0.0")
     port = int(os.environ.get("NSAF_FLASK_PORT", "5000"))
-    app.run(host=host, port=port, debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host=host, port=port, debug=debug)
