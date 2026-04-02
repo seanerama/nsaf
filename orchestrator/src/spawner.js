@@ -17,14 +17,12 @@ export function spawnSession(project, claudeCommandTemplate) {
   const dir = project.project_dir;
 
   const prompt = '/sdd:start --from architect';
-  const command = claudeCommandTemplate
-    .replace('{prompt}', prompt);
 
-  // Parse command into parts
-  const parts = command.split(/\s+/);
-  const bin = parts[0];
-  const args = parts.slice(1);
+  // Build args directly instead of string splitting to preserve quoted prompt
+  const bin = claudeCommandTemplate.split(/\s+/)[0];
+  const args = ['-p', prompt, '--dangerously-skip-permissions'];
 
+  const command = `${bin} -p "${prompt}" --dangerously-skip-permissions`;
   log.info({ slug, command, cwd: dir }, 'Spawning Claude Code session');
 
   const logPath = join(dir, 'build.log');
