@@ -84,7 +84,7 @@ def _seed_project(slug="test-app", status="queued"):
 class TestWebexCommands:
     def test_status_empty(self):
         result = handle_command("status")
-        assert "NSAF Status" in result
+        assert "Nightshift AutoFoundry Status" in result
         assert "0" in result
 
     def test_status_with_projects(self):
