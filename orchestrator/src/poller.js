@@ -57,8 +57,12 @@ export function pollProject(project) {
   }
 
   // Check if SDD pipeline is complete
-  if (state.status === 'complete' || state.progress >= 100) {
-    return { complete: true, project };
+  // SDD doesn't always set status to "complete" — also check if deployer/SRE roles are done
+  if (state.status === 'complete' || state.progress >= 100 || state.progress >= 90) {
+    // Double-check by looking for deployer completion in the completed_roles
+    if (state.deployerComplete || state.progress >= 90) {
+      return { complete: true, project };
+    }
   }
 
   return { complete: false, project };
@@ -70,6 +74,7 @@ export function parseStateMd(content) {
     activeRole: null,
     progress: 0,
     status: null,
+    deployerComplete: false,
   };
 
   // Parse YAML frontmatter
@@ -99,6 +104,19 @@ export function parseStateMd(content) {
   const total = (content.match(/- \[[ x]\]/g) || []).length;
   if (total > 0 && result.progress === 0) {
     result.progress = Math.round((completed / total) * 100);
+  }
+
+  // Check if deployer role is complete
+  if (content.includes('[x] Project Deployer') || content.includes('[x] Site Reliability')) {
+    result.deployerComplete = true;
+  }
+
+  // Also check completed_roles in frontmatter
+  if (content.includes('Project Deployer') && content.includes('completed_roles:')) {
+    const completedRolesMatch = content.match(/completed_roles:\s*\[([^\]]*)\]/);
+    if (completedRolesMatch && completedRolesMatch[1].includes('Project Deployer')) {
+      result.deployerComplete = true;
+    }
   }
 
   return result;
