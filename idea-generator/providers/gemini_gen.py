@@ -19,7 +19,7 @@ def generate(preferences, history_names, count=10):
         prompt = build_prompt(preferences, history_names, rank)
 
         try:
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             response = model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
