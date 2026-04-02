@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { createWriteStream } from 'fs';
+import { createWriteStream, readFileSync } from 'fs';
 import { join } from 'path';
 import pino from 'pino';
 import { projectUpdate } from './db.js';
@@ -16,7 +16,20 @@ export function spawnSession(project, claudeCommandTemplate) {
   const slug = project.slug;
   const dir = project.project_dir;
 
-  const prompt = '/sdd:start --from architect';
+  // Read the vision document for context
+  let visionContext = '';
+  try {
+    const visionPath = join(dir, 'sdd-output', 'vision-document.md');
+    visionContext = readFileSync(visionPath, 'utf-8');
+  } catch { /* no vision doc */ }
+
+  const prompt = `You are building a web app autonomously with NO human interaction. Read sdd-output/vision-document.md for the full spec. Do NOT ask any questions — make all decisions yourself based on the vision document and preferences. Build the complete app end-to-end.
+
+Here is the vision document:
+
+${visionContext}
+
+Now run: /sdd:start --from architect`;
 
   // Build args directly instead of string splitting to preserve quoted prompt
   const bin = claudeCommandTemplate.split(/\s+/)[0];
