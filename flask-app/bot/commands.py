@@ -42,7 +42,7 @@ def cmd_status(_arg):
     reviewing = projects_by_status("reviewing")
     paused = config_get("paused") == "true"
 
-    lines = ["**NSAF Status**\n"]
+    lines = ["**Nightshift AutoFoundry Status**\n"]
     lines.append(f"Queue: **{len(queued)}** projects waiting")
     lines.append(f"Building: **{len(building)}** active sessions")
     lines.append(f"Deployed (local): **{len(deployed)}** ready for review")
@@ -109,7 +109,7 @@ def cmd_promote(slug):
 
 
 def cmd_help(_arg):
-    return """**NSAF Commands**
+    return """**Nightshift AutoFoundry Commands**
 
 - `status` — Queue depth, active builds, recent completions
 - `pause` — Stop dequeuing new projects
