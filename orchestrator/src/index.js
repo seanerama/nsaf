@@ -9,7 +9,7 @@
 
 import 'dotenv/config';
 import pino from 'pino';
-import { initDb, closeDb, projectUpdate, projectsByStatus } from './db.js';
+import { initDb, closeDb, projectUpdate, projectsByStatus, queueEnqueue } from './db.js';
 import { canDequeue, dequeueNext, getQueueDepth, getActiveCount } from './queue.js';
 import { allocatePorts, releasePorts } from './ports.js';
 import { createDatabase } from './postgres.js';
@@ -92,7 +92,10 @@ async function processQueue() {
 
     } catch (err) {
       log.error({ slug, error: err.message }, 'Failed to launch project');
-      projectUpdate(slug, { status: 'queued' }); // Re-queue on failure
+      // Release ports and re-enqueue so it can be retried
+      releasePorts(item.id);
+      projectUpdate(slug, { status: 'queued', port_start: null, port_end: null });
+      queueEnqueue(item.id);
     }
   }
 }
