@@ -84,10 +84,21 @@ def cmd_status(_arg):
 
 
 def cmd_ideas(arg):
-    """List today's ideas with status."""
-    target_date = arg if arg else date.today().isoformat()
-    ideas = ideas_for_date(target_date)
+    """List today's ideas with status. Supports: 'ideas', 'ideas 2', 'ideas openai', 'ideas 2026-04-01'."""
+    parts = arg.split() if arg else []
+    target_date = date.today().isoformat()
+    page = 1
+    source_filter = None
 
+    for p in parts:
+        if p.isdigit() and len(p) <= 2:
+            page = int(p)
+        elif len(p) == 10 and p[4:5] == '-':
+            target_date = p
+        elif p.lower() in ("openai", "gemini", "anthropic"):
+            source_filter = p.lower()
+
+    ideas = ideas_for_date(target_date)
     if not ideas:
         return f"No ideas found for {target_date}. Run `generate` to create new ideas."
 
@@ -96,44 +107,41 @@ def cmd_ideas(arg):
     projects = db.execute("SELECT idea_id, slug, status FROM projects").fetchall()
     idea_status = {p["idea_id"]: (p["slug"], p["status"]) for p in projects}
 
-    # Group by source
-    sources = {"openai": [], "gemini": [], "anthropic": []}
-    for idea in ideas:
-        source = idea.get("source", "unknown")
-        if source in sources:
-            sources[source].append(idea)
+    # Filter by source if requested
+    if source_filter:
+        ideas = [i for i in ideas if i.get("source") == source_filter]
 
-    source_labels = {"openai": "OpenAI", "gemini": "Gemini", "anthropic": "Anthropic"}
-    lines = [f"**Nightshift AutoFoundry — Ideas for {target_date}**\n"]
+    # Paginate — 10 ideas per page to stay under Webex message limit
+    per_page = 10
+    total_pages = max(1, (len(ideas) + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    start = (page - 1) * per_page
+    page_ideas = ideas[start:start + per_page]
 
-    for source, label in source_labels.items():
-        group = sources.get(source, [])
-        if not group:
-            continue
-        lines.append(f"\n**{label}** ({len(group)} ideas)")
-        for idea in sorted(group, key=lambda x: x.get("rank", 0)):
-            status_icon = "⬜"
-            status_text = ""
-            if idea["id"] in idea_status:
-                slug, st = idea_status[idea["id"]]
-                if st == "building":
-                    status_icon = "🔨"
-                    status_text = f" → building as `{slug}`"
-                elif st in ("deployed-local", "reviewing"):
-                    status_icon = "✅"
-                    status_text = f" → `{slug}` ready for review"
-                elif st == "promoted":
-                    status_icon = "🚀"
-                    status_text = f" → `{slug}` promoted"
-                elif st == "queued":
-                    status_icon = "⏳"
-                    status_text = f" → `{slug}` queued"
-                elif st == "scrapped":
-                    status_icon = "❌"
-                    status_text = f" → scrapped"
-            lines.append(f"- {status_icon} **#{idea['id']}** {idea['name']} — {idea['description']}{status_text}")
+    lines = [f"**Nightshift AutoFoundry — Ideas for {target_date}** (page {page}/{total_pages})\n"]
 
-    lines.append(f"\nTotal: **{len(ideas)}** ideas. Use `idea <id>` for details, `queue <id>` to build.")
+    for idea in page_ideas:
+        status_icon = "⬜"
+        status_text = ""
+        if idea["id"] in idea_status:
+            slug, st = idea_status[idea["id"]]
+            status_map = {
+                "building": ("🔨", " → building"),
+                "deployed-local": ("✅", " → deployed"),
+                "reviewing": ("✅", " → reviewing"),
+                "promoted": ("🚀", " → promoted"),
+                "queued": ("⏳", " → queued"),
+                "scrapped": ("❌", " → scrapped"),
+            }
+            status_icon, status_text = status_map.get(st, ("⬜", ""))
+
+        source_tag = idea.get("source", "?")[0].upper()
+        lines.append(f"- {status_icon} **#{idea['id']}** [{source_tag}] {idea['name']}{status_text}")
+
+    lines.append(f"\n{len(ideas)} ideas total. `idea <id>` for details, `queue <id>` to build.")
+    if total_pages > 1:
+        lines.append(f"`ideas {page + 1}` next page. `ideas openai` / `ideas gemini` / `ideas anthropic` to filter.")
+
     return "\n".join(lines)
 
 
