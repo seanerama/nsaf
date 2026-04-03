@@ -13,10 +13,11 @@ log = logging.getLogger(__name__)
 def generate(preferences, history_names, count=10):
     """Generate ideas using Anthropic API with escalating temperature tiers."""
     client = Anthropic()
+    tiers = TEMPERATURE_TIERS.get("anthropic", TEMPERATURE_TIERS["openai"])
     all_ideas = []
     generated_names = []
 
-    for temp, tier_count, label in TEMPERATURE_TIERS:
+    for temp, tier_count, label in tiers:
         prompt = build_prompt(preferences, history_names, tier_count, already_generated=generated_names)
 
         try:

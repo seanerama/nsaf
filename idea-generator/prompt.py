@@ -2,13 +2,31 @@
 
 import json
 
-# Temperature tiers: (temp, count, label)
-TEMPERATURE_TIERS = [
-    (0.3, 3, "conservative"),
-    (0.7, 3, "balanced"),
-    (1.0, 2, "creative"),
-    (1.3, 2, "experimental"),
-]
+# Temperature tiers per provider: (temp, count, label)
+# OpenAI: supports 0-2.0
+# Gemini: supports 0-2.0
+# Anthropic: supports 0-1.0
+TEMPERATURE_TIERS = {
+    "openai": [
+        (0.3, 3, "conservative"),
+        (0.7, 3, "balanced"),
+        (1.0, 2, "creative"),
+        (1.4, 2, "experimental"),
+    ],
+    "gemini": [
+        (0.3, 3, "conservative"),
+        (0.7, 3, "balanced"),
+        (1.0, 2, "creative"),
+        (1.4, 2, "experimental"),
+    ],
+    "anthropic": [
+        (0.2, 3, "conservative"),
+        (0.5, 3, "balanced"),
+        (0.8, 2, "creative"),
+        (1.0, 2, "experimental"),
+    ],
+}
+DEFAULT_TIERS = TEMPERATURE_TIERS["openai"]
 
 
 def build_prompt(preferences, history_names, count, already_generated=None):

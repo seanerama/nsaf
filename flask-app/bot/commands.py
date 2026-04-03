@@ -143,7 +143,9 @@ def cmd_ideas(arg):
             status_icon, status_text = status_map.get(st, ("⬜", ""))
 
         source_tag = idea.get("source", "?")[0].upper()
-        lines.append(f"- {status_icon} **#{idea['id']}** [{source_tag}] {idea['name']}{status_text}")
+        tier = idea.get("tier", "") or ""
+        tier_tag = f" `{tier}`" if tier else ""
+        lines.append(f"- {status_icon} **#{idea['id']}** [{source_tag}]{tier_tag} {idea['name']}{status_text}")
 
     lines.append(f"\n{len(ideas)} ideas total. `idea <id>` for details, `queue <id>` to build.")
     if total_pages > 1:
