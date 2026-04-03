@@ -445,34 +445,67 @@ def cmd_tokens(arg):
 
 
 def cmd_export(_arg):
-    """Export all projects as a CSV file."""
+    """Export all ideas and projects as a CSV file."""
     import csv
     import io
     import tempfile
 
     db = get_db()
-    projects = db.execute(
-        "SELECT id, slug, status, port_start, deployed_url, render_url, sdd_phase, sdd_progress, started_at, completed_at, created_at FROM projects ORDER BY id"
-    ).fetchall()
+
+    # First fix stale phase data: deployed/archived/promoted projects shouldn't show "Design"
+    db.execute("""
+        UPDATE projects SET sdd_phase = 'complete', sdd_progress = 100
+        WHERE status IN ('deployed-local', 'promoted', 'archived') AND sdd_phase IS NOT NULL AND sdd_phase != 'complete'
+    """)
+    db.commit()
+
+    # Get all ideas with their project status (if any)
+    rows = db.execute("""
+        SELECT
+            i.id as idea_id, i.date, i.source, i.rank, i.name, i.description,
+            i.category, i.complexity, i.suggested_stack,
+            p.id as project_id, p.slug, p.status, p.port_start,
+            p.deployed_url, p.render_url, p.sdd_phase, p.sdd_progress,
+            p.started_at, p.completed_at
+        FROM ideas i
+        LEFT JOIN projects p ON p.idea_id = i.id
+        ORDER BY i.date DESC, i.source, i.rank
+    """).fetchall()
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["id", "slug", "status", "port", "local_url", "render_url", "phase", "progress", "started", "completed", "created"])
-    for p in projects:
+    writer.writerow([
+        "idea_id", "date", "source", "rank", "name", "description",
+        "category", "complexity", "suggested_stack",
+        "project_slug", "build_status", "port", "local_url", "render_url",
+        "phase", "progress", "started", "completed",
+    ])
+    for r in rows:
+        status = r["status"] or "not queued"
+        phase = r["sdd_phase"] or ""
+        progress = r["sdd_progress"] or 0
+        if status in ("deployed-local", "promoted", "archived"):
+            phase = "complete"
+            progress = 100
         writer.writerow([
-            p["id"], p["slug"], p["status"], p["port_start"],
-            p["deployed_url"] or "", p["render_url"] or "",
-            p["sdd_phase"] or "", p["sdd_progress"] or 0,
-            p["started_at"] or "", p["completed_at"] or "", p["created_at"] or "",
+            r["idea_id"], r["date"], r["source"], r["rank"],
+            r["name"], r["description"], r["category"], r["complexity"],
+            r["suggested_stack"] or "",
+            r["slug"] or "", status, r["port_start"] or "",
+            r["deployed_url"] or "", r["render_url"] or "",
+            phase, progress,
+            r["started_at"] or "", r["completed_at"] or "",
         ])
 
-    # Write to temp file for Webex attachment
-    csv_path = os.path.join(tempfile.gettempdir(), "nsaf-projects.csv")
+    csv_path = os.path.join(tempfile.gettempdir(), "nsaf-export.csv")
     with open(csv_path, "w") as f:
         f.write(buf.getvalue())
 
+    queued_count = sum(1 for r in rows if r["status"])
+    unqueued_count = sum(1 for r in rows if not r["status"])
+
     return {
-        "text": f"**Nightshift AutoFoundry Export** — {len(projects)} projects",
+        "text": f"**Nightshift AutoFoundry Export** — {len(rows)} ideas ({queued_count} built/queued, {unqueued_count} not queued)",
         "files": [csv_path],
     }
 
