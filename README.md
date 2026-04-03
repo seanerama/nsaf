@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="nsaf-banner-image.jpg" alt="Nightshift AutoFoundry" width="100%">
+</p>
+
 # Nightshift AutoFoundry (NSAF)
 
 A personal app factory that generates, builds, and deploys web applications autonomously. Every morning, AI surfaces curated app ideas. You pick the ones you like. NSAF handles the rest — speccing, coding, testing, and deploying each one without human intervention.

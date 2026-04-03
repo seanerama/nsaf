@@ -18,7 +18,8 @@ from shared.db import get_db
 log = logging.getLogger("nsaf.flask")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-app = Flask(__name__)
+nsaf_root = os.path.join(os.path.dirname(__file__), "..")
+app = Flask(__name__, static_folder=os.path.join(nsaf_root, "static"), static_url_path="/static")
 
 
 def init_app():

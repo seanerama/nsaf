@@ -60,14 +60,15 @@ def format_ideas_html(ideas, selection_url):
         </table>""")
 
     body = "\n".join(sections)
+    banner_url = "https://raw.githubusercontent.com/seanerama/nsaf/master/nsaf-banner-image.jpg"
     return f"""
     <html>
     <body style="font-family:sans-serif;max-width:900px;margin:0 auto;padding:20px">
-        <h1 style="color:#007bff">NSAF Morning Ideas</h1>
-        <p>Here are today's {len(ideas)} app ideas. <a href="{selection_url}" style="color:#007bff;font-weight:bold">Select ideas to build →</a></p>
+        <img src="{banner_url}" alt="Nightshift AutoFoundry" style="width:100%;max-width:900px;border-radius:12px;margin-bottom:16px">
+        <p>Here are today's {len(ideas)} app ideas. <a href="{selection_url}" style="color:#007bff;font-weight:bold">Select ideas to build &rarr;</a></p>
         {body}
         <p style="margin-top:30px;padding:15px;background:#f0f7ff;border-radius:8px">
-            <a href="{selection_url}" style="color:#007bff;font-size:18px;font-weight:bold">Open Selection UI →</a>
+            <a href="{selection_url}" style="color:#007bff;font-size:18px;font-weight:bold">Open Selection UI &rarr;</a>
         </p>
     </body>
     </html>"""
