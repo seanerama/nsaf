@@ -1,12 +1,29 @@
 #!/bin/bash
 # Restart any deployed apps that aren't running.
-# Run via cron or the orchestrator watchdog.
+# Also detect completed builds stuck in "building" status.
+# Run via cron every 2 minutes.
 set -euo pipefail
 
 NSAF_DIR="${NSAF_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$NSAF_DIR"
 
 DB="${NSAF_DB_PATH:-$NSAF_DIR/nsaf.db}"
+
+# --- Phase 1: Fix builds stuck in "building" that actually completed ---
+sqlite3 "$DB" "SELECT slug, port_start, project_dir FROM projects WHERE status = 'building';" | while IFS='|' read -r slug port dir; do
+  [ -z "$slug" ] && continue
+  state="$dir/sdd-output/STATE.md"
+  [ -f "$state" ] || continue
+
+  # Check if deployer role is done
+  if grep -q "\[x\] Project Deployer" "$state" 2>/dev/null || grep -q '"Project Deployer"' "$state" 2>/dev/null; then
+    # Check no claude process is running for this project
+    if ! pgrep -f "claude.*$dir" > /dev/null 2>&1; then
+      echo "$(date -Iseconds) Fixing stuck build: $slug (completed but still marked building)"
+      sqlite3 "$DB" "UPDATE projects SET status = 'deployed-local', sdd_phase = 'complete', sdd_progress = 100, deployed_url = 'http://localhost:${port}', completed_at = datetime('now') WHERE slug = '$slug';"
+    fi
+  fi
+done
 
 sqlite3 "$DB" "SELECT slug, port_start FROM projects WHERE status = 'deployed-local' AND port_start IS NOT NULL ORDER BY port_start;" | while IFS='|' read -r slug port; do
   # Check if port is listening
