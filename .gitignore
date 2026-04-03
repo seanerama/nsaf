@@ -10,3 +10,4 @@ venv/
 projects/
 *.log
 .pytest_cache/
+detected-tools.json

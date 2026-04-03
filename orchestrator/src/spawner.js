@@ -5,6 +5,18 @@ import pino from 'pino';
 import { projectUpdate, projectGet } from './db.js';
 import { launchApp } from './app-launcher.js';
 
+let _detectedTools = null;
+function getDetectedTools() {
+  if (_detectedTools !== null) return _detectedTools;
+  try {
+    const toolsPath = join(process.cwd(), 'detected-tools.json');
+    _detectedTools = JSON.parse(readFileSync(toolsPath, 'utf-8'));
+  } catch {
+    _detectedTools = { tools: [], categories: {} };
+  }
+  return _detectedTools;
+}
+
 const log = pino({ name: 'nsaf.spawner' });
 
 const activeSessions = new Map();
@@ -24,14 +36,21 @@ export function spawnSession(project, claudeCommandTemplate) {
     visionContext = readFileSync(visionPath, 'utf-8');
   } catch { /* no vision doc */ }
 
+  // Build tool-aware prompt
+  const tools = getDetectedTools();
+  let toolNote = '';
+  if (tools.tools.length > 0) {
+    const artTools = tools.categories.art_generation || [];
+    const deployTools = tools.categories.deployment || [];
+    const lines = ['AVAILABLE MCP TOOLS — use these where the vision document instructs:'];
+    if (artTools.length > 0) lines.push(`- Art generation: ${artTools.join(', ')} (mcp__<name>__* tool calls)`);
+    if (deployTools.length > 0) lines.push(`- Deployment: ${deployTools.join(', ')}`);
+    toolNote = lines.join('\n') + '\n\n';
+  }
+
   const prompt = `You are building a web app autonomously with NO human interaction. Read sdd-output/vision-document.md for the full spec. Do NOT ask any questions — make all decisions yourself based on the vision document and preferences. Build the complete app end-to-end.
 
-IMPORTANT — You have MCP tools available for generating art assets:
-- PixelLab MCP tools (mcp__pixellab__*) for pixel art sprites, characters, tiles, animations
-- Leonardo AI MCP tools (mcp__leonardo-ai__*) for illustrations, backgrounds, icons
-USE THESE TOOLS to generate real visual assets. Do NOT use placeholder graphics or emoji.
-
-Here is the vision document:
+${toolNote}Here is the vision document:
 
 ${visionContext}
 

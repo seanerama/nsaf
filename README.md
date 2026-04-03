@@ -77,6 +77,25 @@ source venv/bin/activate
 python idea-generator/generate.py --dry-run
 ```
 
+## MCP Tool Integrations
+
+NSAF detects MCP tools configured in your Claude Code environment and automatically uses them during builds. Run `scripts/detect-tools.sh` to see what's available, or check `detected-tools.json` after setup.
+
+| Tool | Category | How NSAF Uses It |
+|------|----------|-----------------|
+| **Render** | Deployment | Deploys promoted apps to Render via `mcp__render__*` tools |
+| **PixelLab** | Art Generation | Generates pixel art sprites, characters, tiles, and animations for games |
+| **Leonardo AI** | Art Generation | Generates illustrations, backgrounds, icons, and UI art |
+| **Cloudflare** | Infrastructure | Available for DNS, Workers, R2, and other Cloudflare services |
+| **GitHub** | Code Hosting | Repository management and PR creation |
+
+Games automatically get PixelLab sprites + Leonardo backgrounds. Non-game apps get Leonardo for optional hero images and branding. Only tools detected in your Claude Code config are referenced in build prompts — if you don't have PixelLab configured, builds won't try to use it.
+
+To add a new MCP tool, configure it in Claude Code (`~/.claude.json`), then re-run:
+```bash
+bash scripts/detect-tools.sh
+```
+
 ## Configuration
 
 ### Environment Variables

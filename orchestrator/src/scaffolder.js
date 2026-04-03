@@ -1,8 +1,30 @@
-import { mkdirSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import pino from 'pino';
 import { ideaGet } from './db.js';
+
+let _detectedTools = null;
+
+function getDetectedTools() {
+  if (_detectedTools !== null) return _detectedTools;
+  try {
+    const toolsPath = join(process.env.NSAF_DIR || '.', 'detected-tools.json');
+    _detectedTools = JSON.parse(readFileSync(toolsPath, 'utf-8'));
+  } catch {
+    _detectedTools = { tools: [], categories: {} };
+  }
+  return _detectedTools;
+}
+
+function hasToolCategory(category) {
+  const tools = getDetectedTools();
+  return (tools.categories[category] || []).length > 0;
+}
+
+function hasTool(name) {
+  return getDetectedTools().tools.includes(name);
+}
 
 const log = pino({ name: 'nsaf.scaffolder' });
 
@@ -50,27 +72,43 @@ function isGameCategory(category) {
 }
 
 function getVisualDesignSection(category) {
-  if (isGameCategory(category)) {
-    return `## Visual Design Requirements
+  const hasPixelLab = hasTool('pixellab');
+  const hasLeonardo = hasTool('leonardo-ai');
+  const hasRender = hasTool('render');
+  const hasAnyArt = hasPixelLab || hasLeonardo;
+  const isGame = isGameCategory(category);
 
-This is a GAME — it MUST be visually rich, animated, and engaging. No basic grids or placeholder graphics.
+  let sections = [];
 
-### Art Assets (REQUIRED)
-You have access to MCP tools for generating art. USE THEM:
+  if (isGame) {
+    sections.push(`## Visual Design Requirements
 
+This is a GAME — it MUST be visually rich, animated, and engaging. No basic grids or placeholder graphics.`);
+
+    if (hasAnyArt) {
+      sections.push(`\n### Art Assets (REQUIRED)\nYou have access to MCP tools for generating art. USE THEM:`);
+
+      if (hasPixelLab) {
+        sections.push(`
 - **PixelLab MCP** — Use for pixel art sprites, characters, tiles, and game objects:
   - \`mcp__pixellab__create_character\` — Create character sprites with multiple directional views
   - \`mcp__pixellab__animate_character\` — Animate characters (walk, idle, attack, etc.)
   - \`mcp__pixellab__create_isometric_tile\` — Create isometric tiles for game maps
   - \`mcp__pixellab__create_topdown_tileset\` — Create top-down tilesets
   - \`mcp__pixellab__create_sidescroller_tileset\` — Create platformer tilesets
-  - \`mcp__pixellab__create_map_object\` — Create objects like trees, buildings, items
+  - \`mcp__pixellab__create_map_object\` — Create objects like trees, buildings, items`);
+      }
 
+      if (hasLeonardo) {
+        sections.push(`
 - **Leonardo AI MCP** — Use for illustrations, backgrounds, icons, and UI art:
   - \`mcp__leonardo-ai__high_definition_generalist\` — General purpose high-quality images
   - \`mcp__leonardo-ai__hyperrealistic\` — Photorealistic images
-  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text
+  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text`);
+      }
+    }
 
+    sections.push(`
 ### Animation (REQUIRED)
 - Use CSS animations, Framer Motion, or canvas-based animation
 - Characters and game objects should move, react, and animate
@@ -78,31 +116,44 @@ You have access to MCP tools for generating art. USE THEM:
 - Idle animations, hover effects, particle effects where appropriate
 
 ### Visual Standards
-- NO placeholder rectangles, colored divs, or emoji-as-sprites
-- Every game object should have a real generated sprite or illustration
-- Backgrounds should be illustrated, not solid colors
+- NO placeholder rectangles, colored divs, or emoji-as-sprites${hasAnyArt ? '\n- Every game object should have a real generated sprite or illustration' : ''}
+- Backgrounds should be illustrated or styled, not solid colors
 - UI should feel like a polished game, not a web form
-- Color palette should be vibrant and age-appropriate`;
-  }
+- Color palette should be vibrant and age-appropriate`);
 
-  // Non-game apps: clean professional UI with optional generated imagery
-  return `## Visual Design Requirements
+  } else {
+    // Non-game apps
+    sections.push(`## Visual Design Requirements
 
-Build a polished, professional-looking UI. Not a basic unstyled form.
+Build a polished, professional-looking UI. Not a basic unstyled form.`);
 
+    if (hasLeonardo) {
+      sections.push(`
 ### MCP Art Tools (OPTIONAL)
 You have access to image generation MCP tools. Use them where they add value:
 
 - **Leonardo AI MCP** — Use for hero images, illustrations, icons, or branding:
   - \`mcp__leonardo-ai__high_definition_generalist\` — General purpose images
-  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text
+  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text`);
+    }
 
+    sections.push(`
 ### UI Standards
 - Clean, modern design with consistent spacing and typography
 - Smooth transitions and micro-animations (Framer Motion or CSS)
 - Responsive layout — works on mobile and desktop
 - Professional color palette appropriate to the domain
-- Real content and imagery, not Lorem Ipsum placeholders`;
+- Real content and imagery, not Lorem Ipsum placeholders`);
+  }
+
+  // Deployment tools
+  if (hasRender) {
+    sections.push(`
+### Deployment Tools Available
+- **Render MCP** — \`mcp__render__*\` tools available for cloud deployment when promoted`);
+  }
+
+  return sections.join('\n');
 }
 
 function buildVisionDocument(project, idea, preferences) {

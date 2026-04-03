@@ -92,6 +92,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable nsaf-orchestrator nsaf-flask
 echo "  ✓ Services installed and enabled (user: $CURRENT_USER, dir: $NSAF_DIR)"
 
+# Detect available MCP tools
+echo ""
+echo "--- Detecting MCP tools ---"
+bash "$NSAF_DIR/scripts/detect-tools.sh"
+
 # Set up cron
 echo ""
 echo "--- Setting up cron job ---"
