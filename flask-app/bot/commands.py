@@ -460,22 +460,25 @@ def cmd_export(_arg):
     db.commit()
 
     # Get all ideas with their project status (if any)
+    # Use COALESCE for temperature/tier since old rows won't have them
     rows = db.execute("""
         SELECT
-            i.id as idea_id, i.date, i.source, i.rank, i.name, i.description,
+            i.id as idea_id, i.date, i.source, i.name, i.description,
             i.category, i.complexity, i.suggested_stack,
+            COALESCE(i.temperature, 0) as temperature,
+            COALESCE(i.tier, '') as tier,
             p.id as project_id, p.slug, p.status, p.port_start,
             p.deployed_url, p.render_url, p.sdd_phase, p.sdd_progress,
             p.started_at, p.completed_at
         FROM ideas i
         LEFT JOIN projects p ON p.idea_id = i.id
-        ORDER BY i.date DESC, i.source, i.rank
+        ORDER BY i.date DESC, i.source, i.temperature
     """).fetchall()
 
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "idea_id", "date", "source", "rank", "name", "description",
+        "idea_id", "date", "source", "temperature", "tier", "name", "description",
         "category", "complexity", "suggested_stack",
         "project_slug", "build_status", "port", "local_url", "render_url",
         "phase", "progress", "started", "completed",
@@ -488,7 +491,8 @@ def cmd_export(_arg):
             phase = "complete"
             progress = 100
         writer.writerow([
-            r["idea_id"], r["date"], r["source"], r["rank"],
+            r["idea_id"], r["date"], r["source"],
+            r["temperature"], r["tier"],
             r["name"], r["description"], r["category"], r["complexity"],
             r["suggested_stack"] or "",
             r["slug"] or "", status, r["port_start"] or "",

@@ -5,37 +5,46 @@ import logging
 
 from openai import OpenAI
 
-from prompt import build_prompt, DEFAULT_TEMPERATURE
+from prompt import build_prompt, TEMPERATURE_TIERS
 
 log = logging.getLogger(__name__)
 
 
 def generate(preferences, history_names, count=10):
-    """Generate ideas using OpenAI API — single call for all ideas."""
+    """Generate ideas using OpenAI API with escalating temperature tiers."""
     client = OpenAI()
-    prompt = build_prompt(preferences, history_names, count)
+    all_ideas = []
+    generated_names = []
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=DEFAULT_TEMPERATURE,
-            max_tokens=4000,
-        )
-        text = response.choices[0].message.content.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-            text = text.rsplit("```", 1)[0].strip()
+    for temp, tier_count, label in TEMPERATURE_TIERS:
+        prompt = build_prompt(preferences, history_names, tier_count, already_generated=generated_names)
 
-        raw_ideas = json.loads(text)
-        ideas = []
-        for i, idea in enumerate(raw_ideas[:count], 1):
-            idea["rank"] = i
-            idea["source"] = "openai"
-            ideas.append(idea)
-            log.info(f"OpenAI idea {i}: {idea['name']}")
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temp,
+                max_tokens=2000,
+            )
+            text = response.choices[0].message.content.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1]
+                text = text.rsplit("```", 1)[0].strip()
 
-        return ideas
-    except Exception as e:
-        log.error(f"OpenAI generation failed: {e}")
-        return []
+            raw_ideas = json.loads(text)
+            for idea in raw_ideas[:tier_count]:
+                idea["source"] = "openai"
+                idea["temperature"] = temp
+                idea["tier"] = label
+                all_ideas.append(idea)
+                generated_names.append(idea["name"])
+                log.info(f"OpenAI [{label} t={temp}]: {idea['name']}")
+
+        except Exception as e:
+            log.error(f"OpenAI tier {label} (t={temp}) failed: {e}")
+
+    # Assign rank based on final order
+    for i, idea in enumerate(all_ideas, 1):
+        idea["rank"] = i
+
+    return all_ideas

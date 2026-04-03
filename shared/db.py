@@ -44,9 +44,10 @@ def reset_db(db_path=None):
 def ideas_insert(idea):
     db = get_db()
     cursor = db.execute(
-        """INSERT INTO ideas (date, source, rank, name, description, category, complexity, suggested_stack)
-           VALUES (:date, :source, :rank, :name, :description, :category, :complexity, :suggested_stack)""",
-        idea,
+        """INSERT INTO ideas (date, source, rank, name, description, category, complexity, suggested_stack, temperature, tier)
+           VALUES (:date, :source, :rank, :name, :description, :category, :complexity, :suggested_stack,
+                   :temperature, :tier)""",
+        {**{"temperature": 0, "tier": "unknown"}, **idea},
     )
     db.commit()
     return cursor.lastrowid
@@ -54,10 +55,12 @@ def ideas_insert(idea):
 
 def ideas_insert_batch(ideas):
     db = get_db()
+    padded = [{**{"temperature": 0, "tier": "unknown"}, **idea} for idea in ideas]
     db.executemany(
-        """INSERT INTO ideas (date, source, rank, name, description, category, complexity, suggested_stack)
-           VALUES (:date, :source, :rank, :name, :description, :category, :complexity, :suggested_stack)""",
-        ideas,
+        """INSERT INTO ideas (date, source, rank, name, description, category, complexity, suggested_stack, temperature, tier)
+           VALUES (:date, :source, :rank, :name, :description, :category, :complexity, :suggested_stack,
+                   :temperature, :tier)""",
+        padded,
     )
     db.commit()
 

@@ -49,6 +49,8 @@ def init_db_for_generator():
             category TEXT NOT NULL,
             complexity TEXT NOT NULL,
             suggested_stack TEXT,
+            temperature REAL,
+            tier TEXT,
             selected INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now'))
         );
@@ -115,6 +117,8 @@ def store_ideas(ideas, today):
             "category": idea.get("category", "uncategorized"),
             "complexity": idea.get("complexity", "medium"),
             "suggested_stack": stack,
+            "temperature": idea.get("temperature", 0),
+            "tier": idea.get("tier", "unknown"),
         })
     if rows:
         ideas_insert_batch(rows)
