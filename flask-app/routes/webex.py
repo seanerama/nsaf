@@ -74,6 +74,23 @@ def webhook():
     if not text:
         return jsonify({"status": "empty"}), 200
 
+    # Strip bot mention prefix in group spaces
+    # Webex prepends the bot display name when @mentioned: "BotName command args"
+    try:
+        bot_name = bot_info.displayName if bot_info else ""
+        if bot_name and text.lower().startswith(bot_name.lower()):
+            text = text[len(bot_name):].strip()
+    except Exception:
+        pass
+    # Also handle common variations
+    for prefix in ["nightshift-autofoundry", "nightshift autofoundry", "nsaf"]:
+        if text.lower().startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+
+    if not text:
+        return jsonify({"status": "empty"}), 200
+
     # Handle command — returns string or dict with {text, files}
     response = handle_command(text)
 
