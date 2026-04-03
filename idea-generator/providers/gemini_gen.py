@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 
 from google import genai
 from google.genai import types
@@ -16,7 +17,7 @@ def generate(preferences, history_names, count=10):
     prompt = build_prompt(preferences, history_names, count)
 
     try:
-        client = genai.Client()
+        client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
