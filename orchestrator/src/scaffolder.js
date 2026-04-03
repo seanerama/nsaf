@@ -38,6 +38,73 @@ export function scaffoldProject(project, ports, dbInfo, preferences) {
   return dir;
 }
 
+const GAME_CATEGORIES = new Set([
+  'game', 'games', 'educational games', 'learning games', 'math games',
+  'reading games', 'science games', 'puzzle games', 'arcade', 'platformer',
+  'adventure', 'simulation',
+]);
+
+function isGameCategory(category) {
+  const lower = (category || '').toLowerCase();
+  return GAME_CATEGORIES.has(lower) || lower.includes('game');
+}
+
+function getVisualDesignSection(category) {
+  if (isGameCategory(category)) {
+    return `## Visual Design Requirements
+
+This is a GAME — it MUST be visually rich, animated, and engaging. No basic grids or placeholder graphics.
+
+### Art Assets (REQUIRED)
+You have access to MCP tools for generating art. USE THEM:
+
+- **PixelLab MCP** — Use for pixel art sprites, characters, tiles, and game objects:
+  - \`mcp__pixellab__create_character\` — Create character sprites with multiple directional views
+  - \`mcp__pixellab__animate_character\` — Animate characters (walk, idle, attack, etc.)
+  - \`mcp__pixellab__create_isometric_tile\` — Create isometric tiles for game maps
+  - \`mcp__pixellab__create_topdown_tileset\` — Create top-down tilesets
+  - \`mcp__pixellab__create_sidescroller_tileset\` — Create platformer tilesets
+  - \`mcp__pixellab__create_map_object\` — Create objects like trees, buildings, items
+
+- **Leonardo AI MCP** — Use for illustrations, backgrounds, icons, and UI art:
+  - \`mcp__leonardo-ai__high_definition_generalist\` — General purpose high-quality images
+  - \`mcp__leonardo-ai__hyperrealistic\` — Photorealistic images
+  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text
+
+### Animation (REQUIRED)
+- Use CSS animations, Framer Motion, or canvas-based animation
+- Characters and game objects should move, react, and animate
+- Transitions between screens should be smooth
+- Idle animations, hover effects, particle effects where appropriate
+
+### Visual Standards
+- NO placeholder rectangles, colored divs, or emoji-as-sprites
+- Every game object should have a real generated sprite or illustration
+- Backgrounds should be illustrated, not solid colors
+- UI should feel like a polished game, not a web form
+- Color palette should be vibrant and age-appropriate`;
+  }
+
+  // Non-game apps: clean professional UI with optional generated imagery
+  return `## Visual Design Requirements
+
+Build a polished, professional-looking UI. Not a basic unstyled form.
+
+### MCP Art Tools (OPTIONAL)
+You have access to image generation MCP tools. Use them where they add value:
+
+- **Leonardo AI MCP** — Use for hero images, illustrations, icons, or branding:
+  - \`mcp__leonardo-ai__high_definition_generalist\` — General purpose images
+  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text
+
+### UI Standards
+- Clean, modern design with consistent spacing and typography
+- Smooth transitions and micro-animations (Framer Motion or CSS)
+- Responsive layout — works on mobile and desktop
+- Professional color palette appropriate to the domain
+- Real content and imagery, not Lorem Ipsum placeholders`;
+}
+
 function buildVisionDocument(project, idea, preferences) {
   const name = idea ? idea.name : project.slug;
   const description = idea ? idea.description : 'Auto-generated project';
@@ -87,47 +154,15 @@ Complexity: ${complexity}
 
 ${stackStr || '- Use defaults from preferences'}
 
-## Visual Design Requirements
-
-This app MUST be visually rich and engaging — not basic or placeholder-looking. Specifically:
-
-### Art Assets (REQUIRED)
-You have access to MCP tools for generating art. USE THEM:
-
-- **PixelLab MCP** — Use for pixel art sprites, characters, tiles, and game objects:
-  - \`mcp__pixellab__create_character\` — Create character sprites with multiple directional views
-  - \`mcp__pixellab__animate_character\` — Animate characters (walk, idle, attack, etc.)
-  - \`mcp__pixellab__create_isometric_tile\` — Create isometric tiles for game maps
-  - \`mcp__pixellab__create_topdown_tileset\` — Create top-down tilesets
-  - \`mcp__pixellab__create_sidescroller_tileset\` — Create platformer tilesets
-  - \`mcp__pixellab__create_map_object\` — Create objects like trees, buildings, items
-
-- **Leonardo AI MCP** — Use for illustrations, backgrounds, icons, and UI art:
-  - \`mcp__leonardo-ai__high_definition_generalist\` — General purpose high-quality images
-  - \`mcp__leonardo-ai__hyperrealistic\` — Photorealistic images
-  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text
-
-### Animation (REQUIRED)
-- Use CSS animations, Framer Motion, or canvas-based animation
-- Characters and game objects should move, react, and animate
-- Transitions between screens should be smooth
-- Idle animations, hover effects, particle effects where appropriate
-
-### Visual Standards
-- NO placeholder rectangles, colored divs, or emoji-as-sprites
-- Every game object should have a real generated sprite or illustration
-- Backgrounds should be illustrated, not solid colors
-- UI should feel like a polished game, not a web form
-- Color palette should be vibrant and age-appropriate
+${getVisualDesignSection(category)}
 
 ## Scope (MVP)
 
 Build a complete, working web application with:
-- Frontend with responsive UI and rich visual assets
+- Frontend with responsive, polished UI
 - Backend API
 - Database for persistent storage
 - Core feature set as described above
-- Generated art assets using PixelLab and/or Leonardo MCP tools
 
 ## Constraints
 
