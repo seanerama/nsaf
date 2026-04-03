@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import { createWriteStream, readFileSync } from 'fs';
 import { join } from 'path';
 import pino from 'pino';
-import { projectUpdate } from './db.js';
+import { projectUpdate, projectGet } from './db.js';
 import { launchApp } from './app-launcher.js';
 
 const log = pino({ name: 'nsaf.spawner' });
@@ -89,9 +89,12 @@ Now run: /sdd:start --from architect`;
       }
     } catch { /* can't read files */ }
 
-    if (completed) {
+    // Re-read project from DB to get current port_start (set after dequeue)
+    const currentProject = projectGet(slug) || project;
+    const portStart = currentProject.port_start;
+
+    if (completed || code === 0) {
       // Auto-launch the app
-      const portStart = project.port_start;
       const launched = launchApp(dir, portStart);
       const deployedUrl = launched ? launched.url : `http://localhost:${portStart}`;
 
@@ -101,24 +104,7 @@ Now run: /sdd:start --from architect`;
         completed_at: new Date().toISOString(),
         last_state_change: new Date().toISOString(),
       });
-      log.info({ slug, deployedUrl, strategy: launched?.strategy }, 'Build completed and app launched');
-    } else if (code === 0) {
-      // Exited clean but no deployer — might be partially done
-      // Still try to launch in case the app was built but deployer role wasn't tracked
-      const portStart = project.port_start;
-      const launched = launchApp(dir, portStart);
-      if (launched) {
-        projectUpdate(slug, {
-          status: 'deployed-local',
-          deployed_url: launched.url,
-          completed_at: new Date().toISOString(),
-          last_state_change: new Date().toISOString(),
-        });
-        log.info({ slug, url: launched.url, strategy: launched.strategy }, 'Build likely complete — app launched');
-      } else {
-        projectUpdate(slug, { last_state_change: new Date().toISOString() });
-        log.warn({ slug }, 'Session exited clean but could not launch app');
-      }
+      log.info({ slug, deployedUrl, strategy: launched?.strategy, completed }, 'Build finished and app launched');
       log.warn({ slug }, 'Session exited clean but completion not confirmed');
     } else {
       log.warn({ slug, code }, 'Session exited with error');
