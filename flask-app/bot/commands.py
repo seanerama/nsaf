@@ -29,10 +29,17 @@ def handle_command(text):
         "skip": cmd_skip,
         "restart": cmd_restart,
         "promote": cmd_promote,
+        "demote": cmd_demote,
         "ideas": cmd_ideas,
         "idea": cmd_idea_detail,
         "generate": cmd_generate,
         "queue": cmd_queue_idea,
+        "export": cmd_export,
+        "delete": cmd_delete,
+        "rebuild": cmd_rebuild,
+        "modify": cmd_modify,
+        "archive": cmd_archive,
+        "gitpush": cmd_gitpush,
         "system": cmd_system,
         "tokens": cmd_tokens,
         "debug": cmd_debug,
@@ -437,6 +444,306 @@ def cmd_tokens(arg):
     return "\n".join(lines)
 
 
+def cmd_export(_arg):
+    """Export all projects as a CSV file."""
+    import csv
+    import io
+    import tempfile
+
+    db = get_db()
+    projects = db.execute(
+        "SELECT id, slug, status, port_start, deployed_url, render_url, sdd_phase, sdd_progress, started_at, completed_at, created_at FROM projects ORDER BY id"
+    ).fetchall()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "slug", "status", "port", "local_url", "render_url", "phase", "progress", "started", "completed", "created"])
+    for p in projects:
+        writer.writerow([
+            p["id"], p["slug"], p["status"], p["port_start"],
+            p["deployed_url"] or "", p["render_url"] or "",
+            p["sdd_phase"] or "", p["sdd_progress"] or 0,
+            p["started_at"] or "", p["completed_at"] or "", p["created_at"] or "",
+        ])
+
+    # Write to temp file for Webex attachment
+    csv_path = os.path.join(tempfile.gettempdir(), "nsaf-projects.csv")
+    with open(csv_path, "w") as f:
+        f.write(buf.getvalue())
+
+    return {
+        "text": f"**Nightshift AutoFoundry Export** — {len(projects)} projects",
+        "files": [csv_path],
+    }
+
+
+def cmd_delete(arg):
+    """Delete one or more projects by ID or slug."""
+    if not arg:
+        return "Usage: `delete <id-or-slug> [id-or-slug ...]`"
+
+    targets = arg.split()
+    deleted = []
+    errors = []
+
+    for target in targets:
+        # Find by ID or slug
+        db = get_db()
+        project = None
+        try:
+            pid = int(target)
+            row = db.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
+            if row:
+                project = dict(row)
+        except ValueError:
+            project = project_get(target)
+
+        if not project:
+            errors.append(f"`{target}` not found")
+            continue
+
+        slug = project["slug"]
+
+        # Kill any running processes on the project's ports
+        if project.get("port_start"):
+            try:
+                subprocess.run(["fuser", "-k", f"{project['port_start']}/tcp"], capture_output=True, timeout=5)
+            except Exception:
+                pass
+
+        # Remove project directory
+        project_dir = project.get("project_dir", "")
+        if project_dir and os.path.isdir(project_dir):
+            import shutil
+            shutil.rmtree(project_dir, ignore_errors=True)
+
+        # Clean up DB
+        db.execute("DELETE FROM queue WHERE project_id = ?", (project["id"],))
+        db.execute("DELETE FROM ports WHERE project_id = ?", (project["id"],))
+        db.execute("DELETE FROM projects WHERE id = ?", (project["id"],))
+        db.commit()
+
+        deleted.append(slug)
+
+    lines = []
+    if deleted:
+        lines.append(f"Deleted: {', '.join(f'`{s}`' for s in deleted)}")
+    if errors:
+        lines.append(f"Not found: {', '.join(errors)}")
+    return "\n".join(lines)
+
+
+def cmd_rebuild(arg):
+    """Rebuild a project from scratch with optional notes."""
+    if not arg:
+        return "Usage: `rebuild <slug> [notes about what to change]`"
+
+    parts = arg.split(None, 1)
+    slug = parts[0]
+    notes = parts[1] if len(parts) > 1 else ""
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    project_dir = project.get("project_dir", "")
+
+    # Kill running processes
+    if project.get("port_start"):
+        try:
+            subprocess.run(["fuser", "-k", f"{project['port_start']}/tcp"], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+    # Remove old project directory
+    if project_dir and os.path.isdir(project_dir):
+        import shutil
+        shutil.rmtree(project_dir, ignore_errors=True)
+
+    # Save rebuild notes to DB and re-queue
+    rebuild_note = f"REBUILD: {notes}" if notes else "REBUILD from scratch"
+    project_update(slug,
+        status="queued",
+        port_start=None, port_end=None,
+        started_at=None, completed_at=None,
+        stall_alerted=0, sdd_phase=None,
+        sdd_active_role=None, sdd_progress=0,
+        deployed_url=None, render_url=None,
+    )
+
+    # Release ports
+    db = get_db()
+    db.execute("DELETE FROM ports WHERE project_id = ?", (project["id"],))
+    db.execute("DELETE FROM queue WHERE project_id = ?", (project["id"],))
+    db.commit()
+    queue_enqueue(project["id"])
+
+    # Write rebuild notes so the scaffolder can include them in the vision doc
+    notes_dir = os.path.join(os.environ.get("NSAF_PROJECTS_DIR", "./projects"), slug)
+    os.makedirs(notes_dir, exist_ok=True)
+    if notes:
+        with open(os.path.join(notes_dir, "rebuild-notes.md"), "w") as f:
+            f.write(f"# Rebuild Notes\n\n{notes}\n")
+
+    return f"Project `{slug}` queued for complete rebuild.\n**Notes:** {notes or 'none'}"
+
+
+def cmd_modify(arg):
+    """Spawn a Claude session to modify an existing project."""
+    if not arg:
+        return "Usage: `modify <slug> <description of changes needed>`"
+
+    parts = arg.split(None, 1)
+    slug = parts[0]
+    changes = parts[1] if len(parts) > 1 else "Make improvements to this project."
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{slug}` not found."
+
+    prompt = (
+        f"You are modifying an existing deployed web app at {project_dir}. "
+        f"The app is currently running at {project.get('deployed_url', 'unknown')}. "
+        f"\n\nCHANGES REQUESTED: {changes}"
+        f"\n\nMake the requested changes, test them, and restart the app. "
+        f"Do NOT rebuild from scratch — modify the existing code. "
+        f"Keep everything that works, only change what's needed."
+    )
+
+    claude_bin = os.environ.get("NSAF_CLAUDE_COMMAND", "claude").split()[0]
+    modify_log = os.path.join(project_dir, "modify.log")
+
+    try:
+        proc = subprocess.Popen(
+            [claude_bin, "-p", prompt, "--dangerously-skip-permissions"],
+            cwd=project_dir,
+            stdout=open(modify_log, "w"),
+            stderr=subprocess.STDOUT,
+        )
+        return (
+            f"Modify session started for `{slug}` (PID {proc.pid}).\n\n"
+            f"**Changes:** {changes}\n"
+            f"**Log:** `{modify_log}`"
+        )
+    except Exception as e:
+        return f"Failed to start modify session: {e}"
+
+
+def cmd_demote(slug):
+    """Remove a project from Render (revert to local-only)."""
+    if not slug:
+        return "Usage: `demote <slug>`"
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    if project["status"] != "promoted":
+        return f"Project `{slug}` is `{project['status']}` — can only demote promoted projects."
+
+    # Spawn Claude to remove from Render
+    project_dir = project.get("project_dir", "")
+    claude_bin = os.environ.get("NSAF_CLAUDE_COMMAND", "claude").split()[0]
+
+    prompt = (
+        f"Remove the Render deployment for this project. "
+        f"Use the Render MCP tools to delete the service. "
+        f"The Render URL was: {project.get('render_url', 'unknown')}"
+    )
+
+    try:
+        proc = subprocess.Popen(
+            [claude_bin, "-p", prompt, "--dangerously-skip-permissions"],
+            cwd=project_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        project_update(slug, status="deployed-local", render_url=None)
+        return f"Project `{slug}` demoted to local-only. Render service being removed (PID {proc.pid})."
+    except Exception as e:
+        project_update(slug, status="deployed-local", render_url=None)
+        return f"Project `{slug}` status reverted to local. Render cleanup failed: {e}"
+
+
+def cmd_archive(slug):
+    """Stop a project from running locally but keep the files."""
+    if not slug:
+        return "Usage: `archive <slug>`"
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    # Kill running processes on project ports
+    if project.get("port_start"):
+        for port in range(project["port_start"], project.get("port_end", project["port_start"]) + 1):
+            try:
+                subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
+            except Exception:
+                pass
+
+    # Release ports
+    db = get_db()
+    db.execute("DELETE FROM ports WHERE project_id = ?", (project["id"],))
+    db.commit()
+
+    project_update(slug, status="archived", port_start=None, port_end=None, deployed_url=None)
+    return f"Project `{slug}` archived. Processes stopped, ports released. Files preserved at `{project.get('project_dir', '?')}`."
+
+
+def cmd_gitpush(slug):
+    """Push a project to a public GitHub repo."""
+    if not slug:
+        return "Usage: `gitpush <slug>`"
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{slug}` not found."
+
+    try:
+        # Check if gh is available
+        subprocess.run(["gh", "auth", "status"], capture_output=True, check=True, timeout=10)
+    except Exception:
+        return "GitHub CLI (`gh`) not authenticated. Run `gh auth login` on the server."
+
+    try:
+        # Create public repo and push
+        result = subprocess.run(
+            ["gh", "repo", "create", slug, "--public", "--source", ".", "--remote", "origin", "--push"],
+            cwd=project_dir,
+            capture_output=True, text=True, timeout=60,
+        )
+
+        if result.returncode == 0:
+            # Extract repo URL from output
+            repo_url = result.stdout.strip() or f"https://github.com/{slug}"
+            return f"Project `{slug}` pushed to GitHub: {repo_url}"
+        else:
+            # Repo might already exist, try just pushing
+            subprocess.run(["git", "add", "-A"], cwd=project_dir, capture_output=True, timeout=10)
+            subprocess.run(
+                ["git", "commit", "-m", "Update from Nightshift AutoFoundry"],
+                cwd=project_dir, capture_output=True, timeout=10,
+            )
+            result2 = subprocess.run(
+                ["git", "push", "-u", "origin", "master"],
+                cwd=project_dir, capture_output=True, text=True, timeout=30,
+            )
+            if result2.returncode == 0:
+                return f"Project `{slug}` pushed to GitHub."
+            return f"Git push failed: {result.stderr.strip()}\n{result2.stderr.strip()}"
+    except Exception as e:
+        return f"Failed to push to GitHub: {e}"
+
+
 def cmd_pause(_arg):
     config_set("paused", "true")
     return "Queue paused. Active builds will continue but no new projects will be dequeued."
@@ -491,17 +798,26 @@ def cmd_help(_arg):
 - `pause` / `resume` — Control the build queue
 - `skip <slug>` — Scrap a project
 - `restart <slug>` — Re-queue a stalled project
-- `promote <slug>` — Deploy to Render
+- `rebuild <slug> [notes]` — Full rebuild with optional notes
+- `modify <slug> <changes>` — Apply changes to existing build
 
 **Ideas**
-- `ideas` — List today's ideas with build status
-- `ideas YYYY-MM-DD` — List ideas for a specific date
+- `ideas` — List today's ideas (page 1)
+- `ideas 2` / `ideas openai` — Page or filter
 - `idea <id>` — Detailed view of an idea
 - `queue <id>` — Add an idea to the build queue
 - `generate` — Trigger new idea generation
 
+**Lifecycle**
+- `promote <slug>` — Deploy to Render
+- `demote <slug>` — Remove from Render
+- `archive <slug>` — Stop locally, keep files
+- `delete <id> [id...]` — Permanently delete projects
+- `gitpush <slug>` — Push to a public GitHub repo
+- `export` — Download CSV of all projects
+
 **Troubleshooting**
-- `debug <slug> <problem>` — Spawn Claude to diagnose and fix a deployed app
+- `debug <slug> <problem>` — Diagnose and fix a deployed app
 
 **Monitoring**
 - `system` — CPU, memory, disk, active sessions

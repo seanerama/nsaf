@@ -34,9 +34,19 @@ export function scaffoldProject(project, ports, dbInfo, preferences) {
   // Create directory structure
   mkdirSync(join(dir, 'sdd-output'), { recursive: true });
 
+  // Check for rebuild notes from a previous build
+  let rebuildNotes = '';
+  const rebuildNotesPath = join(dir, 'rebuild-notes.md');
+  if (existsSync(rebuildNotesPath)) {
+    rebuildNotes = readFileSync(rebuildNotesPath, 'utf-8');
+  }
+
   // Write vision document from idea metadata
   const idea = project.idea_id ? ideaGet(project.idea_id) : null;
-  const visionDoc = buildVisionDocument(project, idea, preferences);
+  let visionDoc = buildVisionDocument(project, idea, preferences);
+  if (rebuildNotes) {
+    visionDoc += `\n\n## Rebuild Instructions\n\nThis is a REBUILD. The previous version had issues. Pay special attention to:\n\n${rebuildNotes}\n`;
+  }
   writeFileSync(join(dir, 'sdd-output', 'vision-document.md'), visionDoc);
 
   // Write .env for the generated app

@@ -74,16 +74,22 @@ def webhook():
     if not text:
         return jsonify({"status": "empty"}), 200
 
-    # Handle command
+    # Handle command — returns string or dict with {text, files}
     response = handle_command(text)
 
     # Reply
     try:
         room_id = message_data.get("roomId", "")
-        if room_id:
-            api.messages.create(roomId=room_id, markdown=response)
+        kwargs = {"roomId": room_id} if room_id else {"toPersonId": person_id}
+
+        if isinstance(response, dict):
+            kwargs["markdown"] = response.get("text", "")
+            if response.get("files"):
+                kwargs["files"] = response["files"]
         else:
-            api.messages.create(toPersonId=person_id, markdown=response)
+            kwargs["markdown"] = response
+
+        api.messages.create(**kwargs)
     except Exception as e:
         log.error(f"Failed to send reply: {e}")
 
