@@ -26,6 +26,11 @@ export function spawnSession(project, claudeCommandTemplate) {
 
   const prompt = `You are building a web app autonomously with NO human interaction. Read sdd-output/vision-document.md for the full spec. Do NOT ask any questions — make all decisions yourself based on the vision document and preferences. Build the complete app end-to-end.
 
+IMPORTANT — You have MCP tools available for generating art assets:
+- PixelLab MCP tools (mcp__pixellab__*) for pixel art sprites, characters, tiles, animations
+- Leonardo AI MCP tools (mcp__leonardo-ai__*) for illustrations, backgrounds, icons
+USE THESE TOOLS to generate real visual assets. Do NOT use placeholder graphics or emoji.
+
 Here is the vision document:
 
 ${visionContext}

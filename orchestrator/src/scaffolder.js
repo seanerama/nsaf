@@ -75,6 +75,7 @@ General users interested in ${category} applications.
 
 - App is functional and deployed locally
 - Core features work end-to-end
+- Visually polished with custom artwork and animations
 - Passes automated and manual QA checks
 
 ## Core Concepts
@@ -86,13 +87,47 @@ Complexity: ${complexity}
 
 ${stackStr || '- Use defaults from preferences'}
 
+## Visual Design Requirements
+
+This app MUST be visually rich and engaging — not basic or placeholder-looking. Specifically:
+
+### Art Assets (REQUIRED)
+You have access to MCP tools for generating art. USE THEM:
+
+- **PixelLab MCP** — Use for pixel art sprites, characters, tiles, and game objects:
+  - \`mcp__pixellab__create_character\` — Create character sprites with multiple directional views
+  - \`mcp__pixellab__animate_character\` — Animate characters (walk, idle, attack, etc.)
+  - \`mcp__pixellab__create_isometric_tile\` — Create isometric tiles for game maps
+  - \`mcp__pixellab__create_topdown_tileset\` — Create top-down tilesets
+  - \`mcp__pixellab__create_sidescroller_tileset\` — Create platformer tilesets
+  - \`mcp__pixellab__create_map_object\` — Create objects like trees, buildings, items
+
+- **Leonardo AI MCP** — Use for illustrations, backgrounds, icons, and UI art:
+  - \`mcp__leonardo-ai__high_definition_generalist\` — General purpose high-quality images
+  - \`mcp__leonardo-ai__hyperrealistic\` — Photorealistic images
+  - \`mcp__leonardo-ai__accurate_text_rendering\` — Images with readable text
+
+### Animation (REQUIRED)
+- Use CSS animations, Framer Motion, or canvas-based animation
+- Characters and game objects should move, react, and animate
+- Transitions between screens should be smooth
+- Idle animations, hover effects, particle effects where appropriate
+
+### Visual Standards
+- NO placeholder rectangles, colored divs, or emoji-as-sprites
+- Every game object should have a real generated sprite or illustration
+- Backgrounds should be illustrated, not solid colors
+- UI should feel like a polished game, not a web form
+- Color palette should be vibrant and age-appropriate
+
 ## Scope (MVP)
 
 Build a complete, working web application with:
-- Frontend with responsive UI
+- Frontend with responsive UI and rich visual assets
 - Backend API
 - Database for persistent storage
 - Core feature set as described above
+- Generated art assets using PixelLab and/or Leonardo MCP tools
 
 ## Constraints
 
