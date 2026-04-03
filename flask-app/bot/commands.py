@@ -25,6 +25,7 @@ def handle_command(text):
     handlers = {
         "status": cmd_status,
         "pause": cmd_pause,
+        "pauseall": cmd_pauseall,
         "resume": cmd_resume,
         "skip": cmd_skip,
         "restart": cmd_restart,
@@ -783,9 +784,42 @@ def cmd_gitpush(slug):
         return f"Failed to push to GitHub: {e}"
 
 
-def cmd_pause(_arg):
+def cmd_pause(arg):
+    if arg and arg.lower() == "all":
+        return cmd_pauseall("")
     config_set("paused", "true")
-    return "Queue paused. Active builds will continue but no new projects will be dequeued."
+    return "Queue paused. Active builds will continue but no new projects will be dequeued. Use `pause all` to also kill active builds."
+
+
+def cmd_pauseall(_arg):
+    """Pause queue AND kill all active Claude Code sessions."""
+    config_set("paused", "true")
+
+    # Kill all claude sessions
+    try:
+        result = subprocess.run(
+            ["pkill", "-f", "claude.*dangerously-skip-permissions"],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+    # Count what was killed
+    building = projects_by_status("building")
+    killed_slugs = []
+    for p in building:
+        project_update(p["slug"], status="queued", stall_alerted=0)
+        queue_enqueue(p["id"])
+        killed_slugs.append(p["slug"])
+
+    lines = ["**Everything stopped.**\n"]
+    lines.append("Queue: **paused**")
+    lines.append(f"Active sessions killed: **{len(killed_slugs)}**")
+    if killed_slugs:
+        lines.append(f"Re-queued: {', '.join(f'`{s}`' for s in killed_slugs)}")
+    lines.append(f"\nUse `resume` when ready to restart.")
+
+    return "\n".join(lines)
 
 
 def cmd_resume(_arg):
@@ -834,7 +868,9 @@ def cmd_help(_arg):
 
 **Build Management**
 - `status` — Queue depth, active builds, completions
-- `pause` / `resume` — Control the build queue
+- `pause` — Stop dequeuing (active builds continue)
+- `pause all` — Stop everything: pause queue + kill active builds
+- `resume` — Resume the build queue
 - `skip <slug>` — Scrap a project
 - `restart <slug>` — Re-queue a stalled project
 - `rebuild <slug> [notes]` — Full rebuild with optional notes
