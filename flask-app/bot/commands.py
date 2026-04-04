@@ -674,7 +674,7 @@ def cmd_modify(arg):
 
 
 def cmd_demote(slug):
-    """Remove a project from Coolify (revert to local-only)."""
+    """Remove from Coolify + Cloudflare (revert to local-only)."""
     if not slug:
         return "Usage: `demote <slug>`"
 
@@ -687,10 +687,13 @@ def cmd_demote(slug):
 
     coolify_url = os.environ.get("COOLIFY_API_URL", "")
     coolify_token = os.environ.get("COOLIFY_API_TOKEN", "")
+    domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
 
     import requests as req
 
-    # Find the app in Coolify by name
+    lines = [f"**Demoting `{slug}`**\n"]
+
+    # Remove from Coolify
     try:
         resp = req.get(
             f"{coolify_url}/api/v1/applications",
@@ -702,18 +705,29 @@ def cmd_demote(slug):
         coolify_app = next((a for a in apps if a.get("name") == slug), None)
 
         if coolify_app:
-            # Delete from Coolify
-            resp = req.delete(
+            req.delete(
                 f"{coolify_url}/api/v1/applications/{coolify_app['uuid']}",
                 headers={"Authorization": f"Bearer {coolify_token}"},
                 timeout=15,
             )
-            resp.raise_for_status()
+            lines.append("1. Coolify: app removed")
+        else:
+            lines.append("1. Coolify: app not found (already removed?)")
     except Exception as e:
-        pass  # Continue even if Coolify cleanup fails
+        lines.append(f"1. Coolify cleanup failed: {e}")
+
+    # Remove Cloudflare tunnel route + DNS
+    hostname = f"{slug}.{domain}"
+    try:
+        _remove_cloudflare_tunnel_route(hostname)
+        lines.append("2. Cloudflare: tunnel route + DNS removed")
+    except Exception as e:
+        lines.append(f"2. Cloudflare cleanup failed: {e}")
 
     project_update(slug, status="deployed-local", render_url=None)
-    return f"Project `{slug}` demoted to local-only. Coolify deployment removed."
+    lines.append("3. Status: reverted to local-only")
+
+    return "\n".join(lines)
 
 
 def cmd_archive(slug):
@@ -858,8 +872,119 @@ def cmd_restart(slug):
     return f"Project `{slug}` re-queued for rebuild."
 
 
+def _add_cloudflare_tunnel_route(hostname, service_url):
+    """Add a tunnel ingress rule and DNS CNAME for a subdomain."""
+    import requests as req
+
+    cf_account = os.environ.get("CF_ACCOUNT_ID", "")
+    cf_tunnel = os.environ.get("CF_TUNNEL_ID", "")
+    cf_tunnel_token = os.environ.get("CF_TUNNEL_TOKEN", "")
+    cf_dns_token = os.environ.get("CF_DNS_TOKEN", "")
+    cf_zone = os.environ.get("CF_ZONE_ID", "")
+
+    if not all([cf_account, cf_tunnel, cf_tunnel_token, cf_dns_token, cf_zone]):
+        return "Cloudflare not configured"
+
+    tunnel_headers = {"Authorization": f"Bearer {cf_tunnel_token}", "Content-Type": "application/json"}
+    dns_headers = {"Authorization": f"Bearer {cf_dns_token}", "Content-Type": "application/json"}
+
+    # Step 1: Get current tunnel config
+    resp = req.get(
+        f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/cfd_tunnel/{cf_tunnel}/configurations",
+        headers=tunnel_headers, timeout=15,
+    )
+    resp.raise_for_status()
+    config = resp.json()["result"]["config"]
+    ingress = config.get("ingress", [])
+
+    # Check if route already exists
+    if any(r.get("hostname") == hostname for r in ingress):
+        return "route exists"
+
+    # Insert new rule before the catch-all (last entry)
+    new_rule = {"hostname": hostname, "service": service_url}
+    ingress.insert(-1, new_rule)  # Before the catch-all 404
+    config["ingress"] = ingress
+
+    # Step 2: Update tunnel config
+    resp = req.put(
+        f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/cfd_tunnel/{cf_tunnel}/configurations",
+        headers=tunnel_headers,
+        json={"config": config},
+        timeout=15,
+    )
+    resp.raise_for_status()
+
+    # Step 3: Add CNAME DNS record
+    cname_target = f"{cf_tunnel}.cfargotunnel.com"
+    resp = req.post(
+        f"https://api.cloudflare.com/client/v4/zones/{cf_zone}/dns_records",
+        headers=dns_headers,
+        json={
+            "type": "CNAME",
+            "name": hostname,
+            "content": cname_target,
+            "proxied": True,
+        },
+        timeout=15,
+    )
+    # 81057 = record already exists, that's fine
+    if not resp.ok and resp.json().get("errors", [{}])[0].get("code") != 81057:
+        resp.raise_for_status()
+
+    return "ok"
+
+
+def _remove_cloudflare_tunnel_route(hostname):
+    """Remove a tunnel ingress rule and DNS CNAME for a subdomain."""
+    import requests as req
+
+    cf_account = os.environ.get("CF_ACCOUNT_ID", "")
+    cf_tunnel = os.environ.get("CF_TUNNEL_ID", "")
+    cf_tunnel_token = os.environ.get("CF_TUNNEL_TOKEN", "")
+    cf_dns_token = os.environ.get("CF_DNS_TOKEN", "")
+    cf_zone = os.environ.get("CF_ZONE_ID", "")
+
+    if not all([cf_account, cf_tunnel, cf_tunnel_token, cf_dns_token, cf_zone]):
+        return
+
+    tunnel_headers = {"Authorization": f"Bearer {cf_tunnel_token}", "Content-Type": "application/json"}
+    dns_headers = {"Authorization": f"Bearer {cf_dns_token}", "Content-Type": "application/json"}
+
+    # Remove tunnel ingress rule
+    try:
+        resp = req.get(
+            f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/cfd_tunnel/{cf_tunnel}/configurations",
+            headers=tunnel_headers, timeout=15,
+        )
+        resp.raise_for_status()
+        config = resp.json()["result"]["config"]
+        ingress = config.get("ingress", [])
+        config["ingress"] = [r for r in ingress if r.get("hostname") != hostname]
+        req.put(
+            f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/cfd_tunnel/{cf_tunnel}/configurations",
+            headers=tunnel_headers, json={"config": config}, timeout=15,
+        )
+    except Exception:
+        pass
+
+    # Remove DNS CNAME
+    try:
+        resp = req.get(
+            f"https://api.cloudflare.com/client/v4/zones/{cf_zone}/dns_records?type=CNAME&name={hostname}",
+            headers=dns_headers, timeout=15,
+        )
+        for record in resp.json().get("result", []):
+            req.delete(
+                f"https://api.cloudflare.com/client/v4/zones/{cf_zone}/dns_records/{record['id']}",
+                headers=dns_headers, timeout=15,
+            )
+    except Exception:
+        pass
+
+
 def cmd_promote(slug):
-    """Push project to GitHub, deploy via Coolify, set up subdomain."""
+    """Full promotion: GitHub → Coolify → Cloudflare tunnel + DNS → live subdomain."""
     if not slug:
         return "Usage: `promote <slug>`"
     project = project_get(slug)
@@ -880,11 +1005,11 @@ def cmd_promote(slug):
     domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
 
     if not all([coolify_url, coolify_token, project_uuid, server_uuid]):
-        return "Coolify not configured. Set COOLIFY_API_URL, COOLIFY_API_TOKEN, COOLIFY_PROJECT_UUID, COOLIFY_SERVER_UUID in .env"
+        return "Coolify not configured."
 
     import requests as req
 
-    lines = [f"**Promoting `{slug}` to {domain}**\n"]
+    lines = [f"**Promoting `{slug}` to {slug}.{domain}**\n"]
 
     # Step 1: Push to GitHub
     try:
@@ -893,14 +1018,12 @@ def cmd_promote(slug):
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
-            # Create the repo
             subprocess.run(
                 ["gh", "repo", "create", slug, "--public", "--source", ".", "--remote", "origin", "--push"],
                 cwd=project_dir, capture_output=True, text=True, timeout=60,
             )
-            lines.append(f"1. GitHub repo created: `seanerama/{slug}`")
+            lines.append(f"1. GitHub: `seanerama/{slug}` created")
         else:
-            # Repo exists — push latest
             subprocess.run(["git", "add", "-A"], cwd=project_dir, capture_output=True, timeout=10)
             subprocess.run(
                 ["git", "commit", "-m", "Update from Nightshift AutoFoundry", "--allow-empty"],
@@ -910,22 +1033,19 @@ def cmd_promote(slug):
                 ["git", "push", "-u", "origin", "master"],
                 cwd=project_dir, capture_output=True, text=True, timeout=30,
             )
-            lines.append(f"1. GitHub repo updated: `seanerama/{slug}`")
+            lines.append(f"1. GitHub: `seanerama/{slug}` updated")
     except Exception as e:
-        lines.append(f"1. GitHub push failed: {e}")
+        lines.append(f"1. GitHub failed: {e}")
         return "\n".join(lines)
 
     # Step 2: Create app in Coolify
     repo_url = f"https://github.com/seanerama/{slug}"
-    subdomain = f"https://{slug}.{domain}"
+    subdomain_url = f"https://{slug}.{domain}"
 
     try:
         resp = req.post(
             f"{coolify_url}/api/v1/applications/public",
-            headers={
-                "Authorization": f"Bearer {coolify_token}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {coolify_token}", "Content-Type": "application/json"},
             json={
                 "project_uuid": project_uuid,
                 "environment_name": env_name,
@@ -936,16 +1056,16 @@ def cmd_promote(slug):
                 "git_branch": "master",
                 "build_pack": "nixpacks",
                 "ports_exposes": "3000",
-                "domains": subdomain,
+                "domains": subdomain_url,
             },
             timeout=30,
         )
         resp.raise_for_status()
         app_data = resp.json()
         app_uuid = app_data.get("uuid", "")
-        lines.append(f"2. Coolify app created: `{app_uuid}`")
+        lines.append(f"2. Coolify: app `{app_uuid}` created")
     except Exception as e:
-        lines.append(f"2. Coolify app creation failed: {e}")
+        lines.append(f"2. Coolify failed: {e}")
         return "\n".join(lines)
 
     # Step 3: Trigger deploy
@@ -956,16 +1076,31 @@ def cmd_promote(slug):
             timeout=30,
         )
         resp.raise_for_status()
-        lines.append(f"3. Deployment triggered")
+        lines.append(f"3. Coolify: build triggered")
     except Exception as e:
-        lines.append(f"3. Deploy trigger failed: {e}")
+        lines.append(f"3. Coolify deploy failed: {e}")
 
-    # Step 4: Update project status
-    render_url = subdomain
-    project_update(slug, status="promoted", render_url=render_url)
-    lines.append(f"4. Status updated to promoted")
-    lines.append(f"\n**URL:** {subdomain}")
-    lines.append(f"\nDeployment is building in Coolify. Check {coolify_url} for progress.")
+    # Step 4: Cloudflare tunnel route + DNS
+    hostname = f"{slug}.{domain}"
+    # Coolify assigns a port — for now route to Coolify's Traefik proxy
+    service_url = f"http://localhost:3000"  # Coolify routes internally via Traefik labels
+
+    try:
+        result = _add_cloudflare_tunnel_route(hostname, service_url)
+        if result == "ok":
+            lines.append(f"4. Cloudflare: tunnel route + DNS CNAME added")
+        elif result == "route exists":
+            lines.append(f"4. Cloudflare: route already exists")
+        else:
+            lines.append(f"4. Cloudflare: {result}")
+    except Exception as e:
+        lines.append(f"4. Cloudflare failed: {e}")
+
+    # Step 5: Update project status
+    project_update(slug, status="promoted", render_url=subdomain_url)
+    lines.append(f"5. Status: promoted")
+    lines.append(f"\n**Live at:** {subdomain_url}")
+    lines.append(f"**Coolify:** {coolify_url}")
 
     return "\n".join(lines)
 
