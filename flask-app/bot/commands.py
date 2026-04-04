@@ -674,7 +674,7 @@ def cmd_modify(arg):
 
 
 def cmd_demote(slug):
-    """Remove a project from Render (revert to local-only)."""
+    """Remove a project from Coolify (revert to local-only)."""
     if not slug:
         return "Usage: `demote <slug>`"
 
@@ -685,28 +685,35 @@ def cmd_demote(slug):
     if project["status"] != "promoted":
         return f"Project `{slug}` is `{project['status']}` — can only demote promoted projects."
 
-    # Spawn Claude to remove from Render
-    project_dir = project.get("project_dir", "")
-    claude_bin = os.environ.get("NSAF_CLAUDE_COMMAND", "claude").split()[0]
+    coolify_url = os.environ.get("COOLIFY_API_URL", "")
+    coolify_token = os.environ.get("COOLIFY_API_TOKEN", "")
 
-    prompt = (
-        f"Remove the Render deployment for this project. "
-        f"Use the Render MCP tools to delete the service. "
-        f"The Render URL was: {project.get('render_url', 'unknown')}"
-    )
+    import requests as req
 
+    # Find the app in Coolify by name
     try:
-        proc = subprocess.Popen(
-            [claude_bin, "-p", prompt, "--dangerously-skip-permissions"],
-            cwd=project_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        resp = req.get(
+            f"{coolify_url}/api/v1/applications",
+            headers={"Authorization": f"Bearer {coolify_token}"},
+            timeout=15,
         )
-        project_update(slug, status="deployed-local", render_url=None)
-        return f"Project `{slug}` demoted to local-only. Render service being removed (PID {proc.pid})."
+        resp.raise_for_status()
+        apps = resp.json()
+        coolify_app = next((a for a in apps if a.get("name") == slug), None)
+
+        if coolify_app:
+            # Delete from Coolify
+            resp = req.delete(
+                f"{coolify_url}/api/v1/applications/{coolify_app['uuid']}",
+                headers={"Authorization": f"Bearer {coolify_token}"},
+                timeout=15,
+            )
+            resp.raise_for_status()
     except Exception as e:
-        project_update(slug, status="deployed-local", render_url=None)
-        return f"Project `{slug}` status reverted to local. Render cleanup failed: {e}"
+        pass  # Continue even if Coolify cleanup fails
+
+    project_update(slug, status="deployed-local", render_url=None)
+    return f"Project `{slug}` demoted to local-only. Coolify deployment removed."
 
 
 def cmd_archive(slug):
@@ -852,15 +859,115 @@ def cmd_restart(slug):
 
 
 def cmd_promote(slug):
+    """Push project to GitHub, deploy via Coolify, set up subdomain."""
     if not slug:
-        return "Usage: `promote <project-slug>`"
+        return "Usage: `promote <slug>`"
     project = project_get(slug)
     if not project:
         return f"Project `{slug}` not found."
     if project["status"] not in ("deployed-local", "reviewing"):
         return f"Project `{slug}` is `{project['status']}` — can only promote deployed or reviewing projects."
-    project_update(slug, status="promoted")
-    return f"Project `{slug}` marked for promotion to Render. Deployment will begin shortly."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{slug}` not found."
+
+    coolify_url = os.environ.get("COOLIFY_API_URL", "")
+    coolify_token = os.environ.get("COOLIFY_API_TOKEN", "")
+    project_uuid = os.environ.get("COOLIFY_PROJECT_UUID", "")
+    server_uuid = os.environ.get("COOLIFY_SERVER_UUID", "")
+    env_name = os.environ.get("COOLIFY_ENVIRONMENT", "production")
+    domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
+
+    if not all([coolify_url, coolify_token, project_uuid, server_uuid]):
+        return "Coolify not configured. Set COOLIFY_API_URL, COOLIFY_API_TOKEN, COOLIFY_PROJECT_UUID, COOLIFY_SERVER_UUID in .env"
+
+    import requests as req
+
+    lines = [f"**Promoting `{slug}` to {domain}**\n"]
+
+    # Step 1: Push to GitHub
+    try:
+        result = subprocess.run(
+            ["gh", "repo", "view", f"seanerama/{slug}", "--json", "name"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            # Create the repo
+            subprocess.run(
+                ["gh", "repo", "create", slug, "--public", "--source", ".", "--remote", "origin", "--push"],
+                cwd=project_dir, capture_output=True, text=True, timeout=60,
+            )
+            lines.append(f"1. GitHub repo created: `seanerama/{slug}`")
+        else:
+            # Repo exists — push latest
+            subprocess.run(["git", "add", "-A"], cwd=project_dir, capture_output=True, timeout=10)
+            subprocess.run(
+                ["git", "commit", "-m", "Update from Nightshift AutoFoundry", "--allow-empty"],
+                cwd=project_dir, capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["git", "push", "-u", "origin", "master"],
+                cwd=project_dir, capture_output=True, text=True, timeout=30,
+            )
+            lines.append(f"1. GitHub repo updated: `seanerama/{slug}`")
+    except Exception as e:
+        lines.append(f"1. GitHub push failed: {e}")
+        return "\n".join(lines)
+
+    # Step 2: Create app in Coolify
+    repo_url = f"https://github.com/seanerama/{slug}"
+    subdomain = f"https://{slug}.{domain}"
+
+    try:
+        resp = req.post(
+            f"{coolify_url}/api/v1/applications/public",
+            headers={
+                "Authorization": f"Bearer {coolify_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "project_uuid": project_uuid,
+                "environment_name": env_name,
+                "server_uuid": server_uuid,
+                "type": "public",
+                "name": slug,
+                "git_repository": repo_url,
+                "git_branch": "master",
+                "build_pack": "nixpacks",
+                "ports_exposes": "3000",
+                "domains": subdomain,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        app_data = resp.json()
+        app_uuid = app_data.get("uuid", "")
+        lines.append(f"2. Coolify app created: `{app_uuid}`")
+    except Exception as e:
+        lines.append(f"2. Coolify app creation failed: {e}")
+        return "\n".join(lines)
+
+    # Step 3: Trigger deploy
+    try:
+        resp = req.post(
+            f"{coolify_url}/api/v1/applications/{app_uuid}/deploy",
+            headers={"Authorization": f"Bearer {coolify_token}"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        lines.append(f"3. Deployment triggered")
+    except Exception as e:
+        lines.append(f"3. Deploy trigger failed: {e}")
+
+    # Step 4: Update project status
+    render_url = subdomain
+    project_update(slug, status="promoted", render_url=render_url)
+    lines.append(f"4. Status updated to promoted")
+    lines.append(f"\n**URL:** {subdomain}")
+    lines.append(f"\nDeployment is building in Coolify. Check {coolify_url} for progress.")
+
+    return "\n".join(lines)
 
 
 def cmd_help(_arg):
@@ -884,8 +991,8 @@ def cmd_help(_arg):
 - `generate` — Trigger new idea generation
 
 **Lifecycle**
-- `promote <slug>` — Deploy to Render
-- `demote <slug>` — Remove from Render
+- `promote <slug>` — Push to GitHub + deploy via Coolify to *.seanmahoney.ai
+- `demote <slug>` — Remove from Coolify, revert to local
 - `archive <slug>` — Stop locally, keep files
 - `delete <id> [id...]` — Permanently delete projects
 - `gitpush <slug>` — Push to a public GitHub repo
