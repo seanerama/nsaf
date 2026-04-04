@@ -795,7 +795,7 @@ def cmd_gitpush(slug):
                 cwd=project_dir, capture_output=True, timeout=10,
             )
             result2 = subprocess.run(
-                ["git", "push", "-u", "origin", "master"],
+                ["git", "push", "-u", "origin", "HEAD"],
                 cwd=project_dir, capture_output=True, text=True, timeout=30,
             )
             if result2.returncode == 0:
@@ -1011,6 +1011,16 @@ def cmd_promote(slug):
 
     lines = [f"**Promoting `{slug}` to {slug}.{domain}**\n"]
 
+    # Detect git branch
+    try:
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_dir, capture_output=True, text=True, timeout=5,
+        )
+        git_branch = branch_result.stdout.strip() or "main"
+    except Exception:
+        git_branch = "main"
+
     # Step 1: Push to GitHub
     try:
         result = subprocess.run(
@@ -1030,7 +1040,7 @@ def cmd_promote(slug):
                 cwd=project_dir, capture_output=True, timeout=10,
             )
             subprocess.run(
-                ["git", "push", "-u", "origin", "master"],
+                ["git", "push", "-u", "origin", "HEAD"],
                 cwd=project_dir, capture_output=True, text=True, timeout=30,
             )
             lines.append(f"1. GitHub: `seanerama/{slug}` updated")
@@ -1053,7 +1063,7 @@ def cmd_promote(slug):
                 "type": "public",
                 "name": slug,
                 "git_repository": repo_url,
-                "git_branch": "master",
+                "git_branch": git_branch,
                 "build_pack": "nixpacks",
                 "ports_exposes": "3000",
                 "domains": subdomain_url,
