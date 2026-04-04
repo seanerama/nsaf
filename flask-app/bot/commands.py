@@ -1021,6 +1021,36 @@ def cmd_promote(slug):
     except Exception:
         git_branch = "main"
 
+    # Step 0: Generate Dockerfile if needed
+    dockerfile_path = os.path.join(project_dir, "Dockerfile")
+    if not os.path.exists(dockerfile_path):
+        try:
+            # Run the dockerize script via node
+            nsaf_dir = os.environ.get("NSAF_DIR", os.path.join(os.path.dirname(__file__), "..", ".."))
+            result = subprocess.run(
+                ["node", "-e", f"""
+import {{ generateDockerfile }} from './orchestrator/src/dockerize.js';
+const result = generateDockerfile('{project_dir}');
+console.log(result ? 'ok' : 'failed');
+"""],
+                cwd=nsaf_dir, capture_output=True, text=True, timeout=15,
+            )
+            if "ok" in result.stdout:
+                # Commit the Dockerfile
+                subprocess.run(["git", "add", "Dockerfile"], cwd=project_dir, capture_output=True, timeout=5)
+                subprocess.run(["git", "add", "-A"], cwd=project_dir, capture_output=True, timeout=5)
+                subprocess.run(
+                    ["git", "commit", "-m", "Add Dockerfile for Coolify deployment"],
+                    cwd=project_dir, capture_output=True, timeout=10,
+                )
+                lines.append("0. Dockerfile generated")
+            else:
+                lines.append("0. Dockerfile generation failed — may need manual Dockerfile")
+        except Exception as e:
+            lines.append(f"0. Dockerfile generation error: {e}")
+    else:
+        lines.append("0. Dockerfile exists")
+
     # Step 1: Push to GitHub
     try:
         result = subprocess.run(
@@ -1064,7 +1094,8 @@ def cmd_promote(slug):
                 "name": slug,
                 "git_repository": repo_url,
                 "git_branch": git_branch,
-                "build_pack": "nixpacks",
+                "build_pack": "dockerfile",
+                "dockerfile_location": "/Dockerfile",
                 "ports_exposes": "3000",
                 "domains": subdomain_url,
             },
