@@ -54,17 +54,9 @@ function detectStructure(dir) {
   const rootPkg = join(dir, 'package.json');
   if (existsSync(rootPkg)) {
     result.hasRootPackage = true;
-    try {
-      const pkg = JSON.parse(readFileSync(rootPkg, 'utf-8'));
-      const scripts = pkg.scripts || {};
-      if (scripts.start) {
-        result.type = 'simple-node';
-        return result;
-      }
-    } catch { /* continue detection */ }
   }
 
-  // Check for client/server or frontend/backend split
+  // Check for client/server or frontend/backend split FIRST (takes priority)
   for (const [clientName, serverName] of [['client', 'server'], ['frontend', 'backend']]) {
     const clientDir = join(dir, clientName);
     const serverDir = join(dir, serverName);
@@ -94,6 +86,17 @@ function detectStructure(dir) {
 
       return result;
     }
+  }
+
+  // Check for simple-node (root package.json with start script, no client/server split)
+  if (result.hasRootPackage) {
+    try {
+      const pkg = JSON.parse(readFileSync(rootPkg, 'utf-8'));
+      if (pkg.scripts && pkg.scripts.start) {
+        result.type = 'simple-node';
+        return result;
+      }
+    } catch { /* continue */ }
   }
 
   // Check for server-only (with index.js)
