@@ -902,7 +902,7 @@ def _add_cloudflare_tunnel_route(hostname, service_url):
         return "route exists"
 
     # Insert new rule before the catch-all (last entry)
-    new_rule = {"hostname": hostname, "service": service_url}
+    new_rule = {"hostname": hostname, "service": service_url, "originRequest": {"noTLSVerify": True}}
     ingress.insert(-1, new_rule)  # Before the catch-all 404
     config["ingress"] = ingress
 
@@ -1153,7 +1153,7 @@ console.log(result ? 'ok' : 'failed');
     # Step 5: Cloudflare tunnel route + DNS
     hostname = f"{slug}.{domain}"
     # Coolify assigns a port — for now route to Coolify's Traefik proxy
-    service_url = "http://localhost:80"  # Coolify's Traefik proxy routes by hostname
+    service_url = "https://localhost:443"  # Coolify's Traefik proxy (HTTPS, TLS verified by Cloudflare)
 
     try:
         result = _add_cloudflare_tunnel_route(hostname, service_url)
