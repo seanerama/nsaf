@@ -1125,7 +1125,7 @@ console.log(result ? 'ok' : 'failed');
     # Step 4: Cloudflare tunnel route + DNS
     hostname = f"{slug}.{domain}"
     # Coolify assigns a port — for now route to Coolify's Traefik proxy
-    service_url = f"http://localhost:3000"  # Coolify routes internally via Traefik labels
+    service_url = "http://localhost:80"  # Coolify's Traefik proxy routes by hostname
 
     try:
         result = _add_cloudflare_tunnel_route(hostname, service_url)
