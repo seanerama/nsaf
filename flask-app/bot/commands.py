@@ -1109,20 +1109,48 @@ console.log(result ? 'ok' : 'failed');
         lines.append(f"2. Coolify failed: {e}")
         return "\n".join(lines)
 
-    # Step 3: Trigger deploy
+    # Step 3: Set environment variables in Coolify
+    coolify_headers = {"Authorization": f"Bearer {coolify_token}", "Content-Type": "application/json"}
+    env_url = f"{coolify_url}/api/v1/applications/{app_uuid}/envs"
+
+    # Database URL — use host.docker.internal to reach host PostgreSQL from container
+    pg_user = os.environ.get("POSTGRES_USER", "nsaf_admin")
+    pg_pass = os.environ.get("POSTGRES_PASSWORD", "")
+    pg_host = "host.docker.internal"
+    pg_port = os.environ.get("POSTGRES_PORT", "5432")
+    db_name = project.get("db_name") or f"nsaf_{slug.replace('-', '_')}"
+
+    env_vars = {
+        "DATABASE_URL": f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{db_name}",
+        "PORT": "3000",
+        "NODE_ENV": "production",
+        "CORS_ORIGIN": subdomain_url,
+    }
+
+    env_set_count = 0
+    for key, value in env_vars.items():
+        try:
+            req.post(env_url, headers=coolify_headers,
+                     json={"key": key, "value": value, "is_preview": False}, timeout=10)
+            env_set_count += 1
+        except Exception:
+            pass
+    lines.append(f"3. Coolify: {env_set_count} env vars set")
+
+    # Step 4: Trigger deploy
     try:
         resp = req.post(
             f"{coolify_url}/api/v1/deploy",
-            headers={"Authorization": f"Bearer {coolify_token}", "Content-Type": "application/json"},
+            headers=coolify_headers,
             json={"uuid": app_uuid},
             timeout=30,
         )
         resp.raise_for_status()
-        lines.append(f"3. Coolify: build triggered")
+        lines.append(f"4. Coolify: build triggered")
     except Exception as e:
-        lines.append(f"3. Coolify deploy failed: {e}")
+        lines.append(f"4. Coolify deploy failed: {e}")
 
-    # Step 4: Cloudflare tunnel route + DNS
+    # Step 5: Cloudflare tunnel route + DNS
     hostname = f"{slug}.{domain}"
     # Coolify assigns a port — for now route to Coolify's Traefik proxy
     service_url = "http://localhost:80"  # Coolify's Traefik proxy routes by hostname
@@ -1130,17 +1158,17 @@ console.log(result ? 'ok' : 'failed');
     try:
         result = _add_cloudflare_tunnel_route(hostname, service_url)
         if result == "ok":
-            lines.append(f"4. Cloudflare: tunnel route + DNS CNAME added")
+            lines.append(f"5. Cloudflare: tunnel route + DNS CNAME added")
         elif result == "route exists":
-            lines.append(f"4. Cloudflare: route already exists")
+            lines.append(f"5. Cloudflare: route already exists")
         else:
-            lines.append(f"4. Cloudflare: {result}")
+            lines.append(f"5. Cloudflare: {result}")
     except Exception as e:
-        lines.append(f"4. Cloudflare failed: {e}")
+        lines.append(f"5. Cloudflare failed: {e}")
 
-    # Step 5: Update project status
+    # Step 6: Update project status
     project_update(slug, status="promoted", render_url=subdomain_url)
-    lines.append(f"5. Status: promoted")
+    lines.append(f"6. Status: promoted")
     lines.append(f"\n**Live at:** {subdomain_url}")
     lines.append(f"**Coolify:** {coolify_url}")
 
