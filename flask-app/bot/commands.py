@@ -1071,8 +1071,9 @@ def cmd_promote(slug):
     # Step 3: Trigger deploy
     try:
         resp = req.post(
-            f"{coolify_url}/api/v1/applications/{app_uuid}/deploy",
-            headers={"Authorization": f"Bearer {coolify_token}"},
+            f"{coolify_url}/api/v1/deploy",
+            headers={"Authorization": f"Bearer {coolify_token}", "Content-Type": "application/json"},
+            json={"uuid": app_uuid},
             timeout=30,
         )
         resp.raise_for_status()
