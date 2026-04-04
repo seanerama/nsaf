@@ -11,3 +11,6 @@ projects/
 *.log
 .pytest_cache/
 detected-tools.json
+app-hub-spec.md
+app-factory-architecture.md
+infrastructure-credentials.env
