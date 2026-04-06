@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NSAF — Codebase Map</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,monospace;background:#0d1117;color:#c9d1d9;overflow:hidden;height:100vh}
+#toolbar{position:fixed;top:0;left:0;right:0;z-index:100;background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#toolbar h1{font-size:14px;color:#58a6ff;white-space:nowrap}
+#toolbar .sep{width:1px;height:20px;background:#30363d}
+.toggle{display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:12px;border:1px solid #30363d;user-select:none;transition:all .2s}
+.toggle.active{border-color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
+.toggle .dot{width:8px;height:8px;border-radius:50%;background:var(--c)}
+#search{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:4px 10px;border-radius:6px;font-size:12px;width:180px}
+#search:focus{outline:none;border-color:#58a6ff}
+#canvas{position:absolute;top:44px;left:0;right:0;bottom:0;overflow:hidden;cursor:grab}
+#canvas.dragging{cursor:grabbing}
+#world{position:absolute;transform-origin:0 0;transition:transform .1s ease-out}
+.node{position:absolute;background:#161b22;border:2px solid var(--c,#30363d);border-radius:8px;padding:10px 14px;cursor:pointer;transition:all .15s;min-width:140px;max-width:220px}
+.node:hover{transform:scale(1.05);z-index:10;box-shadow:0 0 20px color-mix(in srgb,var(--c) 30%,transparent)}
+.node.selected{box-shadow:0 0 0 2px var(--c),0 0 30px color-mix(in srgb,var(--c) 40%,transparent)}
+.node .title{font-size:12px;font-weight:600;color:var(--c);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .subtitle{font-size:10px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .badge{display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:color-mix(in srgb,var(--c) 20%,transparent);color:var(--c);margin-top:4px}
+svg.connections{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+svg.connections path{fill:none;stroke-width:1.5;opacity:.4;transition:opacity .2s}
+svg.connections path.highlighted{stroke-width:2.5;opacity:.9}
+svg.connections path.animated{stroke-dasharray:8 4;animation:flowDash 1s linear infinite}
+@keyframes flowDash{to{stroke-dashoffset:-12}}
+#detail{position:fixed;right:0;top:44px;bottom:0;width:340px;background:#161b22;border-left:1px solid #30363d;padding:16px;overflow-y:auto;transform:translateX(100%);transition:transform .25s ease;z-index:50;font-size:12px}
+#detail.open{transform:translateX(0)}
+#detail h2{font-size:14px;color:#58a6ff;margin-bottom:8px}
+#detail h3{font-size:12px;color:#f0883e;margin:12px 0 4px}
+#detail .close{position:absolute;top:8px;right:12px;cursor:pointer;color:#8b949e;font-size:18px}
+#detail .file{color:#7ee787;font-family:monospace;font-size:11px}
+#detail .conn{padding:4px 0;border-bottom:1px solid #21262d}
+#detail .conn .dir{color:#8b949e;font-size:10px}
+#detail .tag{display:inline-block;font-size:9px;padding:1px 6px;border-radius:8px;margin:2px;background:#21262d;color:#c9d1d9}
+#minimap{position:fixed;bottom:12px;left:12px;width:180px;height:120px;background:#161b22;border:1px solid #30363d;border-radius:6px;z-index:50;overflow:hidden}
+#minimap canvas{width:100%;height:100%}
+#legend{position:fixed;bottom:12px;right:12px;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 12px;z-index:50;font-size:10px;display:flex;gap:12px;flex-wrap:wrap}
+#legend .item{display:flex;align-items:center;gap:4px}
+#legend .swatch{width:10px;height:10px;border-radius:3px}
+.hidden{display:none !important}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <h1>NSAF Codebase Map</h1>
+  <div class="sep"></div>
+  <div class="toggle active" data-layer="orchestrator" style="--c:#f97583" onclick="toggleLayer(this)"><span class="dot"></span>Orchestrator</div>
+  <div class="toggle active" data-layer="flask" style="--c:#b392f0" onclick="toggleLayer(this)"><span class="dot"></span>Flask</div>
+  <div class="toggle active" data-layer="generator" style="--c:#85e89d" onclick="toggleLayer(this)"><span class="dot"></span>Idea Gen</div>
+  <div class="toggle active" data-layer="shared" style="--c:#ffab70" onclick="toggleLayer(this)"><span class="dot"></span>Shared</div>
+  <div class="toggle active" data-layer="external" style="--c:#79c0ff" onclick="toggleLayer(this)"><span class="dot"></span>External APIs</div>
+  <div class="toggle active" data-layer="infra" style="--c:#ffa657" onclick="toggleLayer(this)"><span class="dot"></span>Infrastructure</div>
+  <div class="sep"></div>
+  <input id="search" type="text" placeholder="Search nodes..." oninput="searchNodes(this.value)">
+</div>
+<div id="canvas">
+  <div id="world">
+    <svg class="connections" id="svg" width="3000" height="2000"></svg>
+  </div>
+</div>
+<div id="detail">
+  <span class="close" onclick="closeDetail()">&times;</span>
+  <div id="detail-content"></div>
+</div>
+<div id="legend">
+  <div class="item"><div class="swatch" style="background:#f97583"></div>Orchestrator</div>
+  <div class="item"><div class="swatch" style="background:#b392f0"></div>Flask</div>
+  <div class="item"><div class="swatch" style="background:#85e89d"></div>Idea Gen</div>
+  <div class="item"><div class="swatch" style="background:#ffab70"></div>Shared</div>
+  <div class="item"><div class="swatch" style="background:#79c0ff"></div>External</div>
+  <div class="item"><div class="swatch" style="background:#ffa657"></div>Infra</div>
+</div>
+<script>
+const COLORS={orchestrator:'#f97583',flask:'#b392f0',generator:'#85e89d',shared:'#ffab70',external:'#79c0ff',infra:'#ffa657'};
+
+const nodes=[
+  // Orchestrator
+  {id:'orch-index',label:'index.js',sub:'Main Loop',layer:'orchestrator',x:500,y:200,file:'orchestrator/src/index.js',desc:'Entry point. Runs queue processing + monitoring loop every 10s. Handles SIGTERM gracefully.',exports:['processQueue','monitorProjects','mainLoop'],imports:['db','queue','ports','postgres','scaffolder','spawner','poller','stall','completion','notify','digest','promotion']},
+  {id:'orch-db',label:'db.js',sub:'SQLite Interface',layer:'orchestrator',x:300,y:100,file:'orchestrator/src/db.js',desc:'All SQLite CRUD operations. 6 tables, WAL mode, 5s busy timeout. Used by every orchestrator module.',exports:['initDb','projectCreate','projectUpdate','projectGet','queueEnqueue','queueDequeue','portAllocate','configGet','configSet'],imports:['better-sqlite3']},
+  {id:'orch-queue',label:'queue.js',sub:'Queue Manager',layer:'orchestrator',x:280,y:250,file:'orchestrator/src/queue.js',desc:'Wraps DB queue ops. Checks pause flag and concurrency limit before allowing dequeue.',exports:['isPaused','canDequeue','dequeueNext','getQueueDepth'],imports:['db']},
+  {id:'orch-ports',label:'ports.js',sub:'Port Allocator',layer:'orchestrator',x:280,y:350,file:'orchestrator/src/ports.js',desc:'Allocates/releases 10-port batches from range 5020-5999.',exports:['allocatePorts','releasePorts'],imports:['db']},
+  {id:'orch-postgres',label:'postgres.js',sub:'DB Provisioner',layer:'orchestrator',x:480,y:400,file:'orchestrator/src/postgres.js',desc:'Creates/drops PostgreSQL databases per app via execFileSync. Uses PGPASSWORD env.',exports:['createDatabase','dropDatabase'],imports:['child_process']},
+  {id:'orch-scaffold',label:'scaffolder.js',sub:'Project Setup',layer:'orchestrator',x:680,y:350,file:'orchestrator/src/scaffolder.js',desc:'Creates project dir, vision-document.md (with MCP tool refs for games), .env, .gitignore, git init.',exports:['scaffoldProject'],imports:['db','detected-tools.json']},
+  {id:'orch-spawner',label:'spawner.js',sub:'Session Launcher',layer:'orchestrator',x:700,y:200,file:'orchestrator/src/spawner.js',desc:'Spawns Claude Code with vision doc context. Strips API keys from env. On exit, detects completion and auto-launches app.',exports:['spawnSession','getActiveSessions'],imports:['db','app-launcher','detected-tools.json']},
+  {id:'orch-poller',label:'poller.js',sub:'STATE.md Monitor',layer:'orchestrator',x:700,y:100,file:'orchestrator/src/poller.js',desc:'Polls each building project STATE.md. Parses YAML frontmatter for phase/role/progress. Detects completion at 90%+.',exports:['pollAllProjects','parseStateMd'],imports:['db']},
+  {id:'orch-stall',label:'stall.js',sub:'Stall Detection',layer:'orchestrator',x:500,y:80,file:'orchestrator/src/stall.js',desc:'Flags projects with no state change > 30min. Sets stall_alerted=1 to prevent repeat alerts.',exports:['checkStalls'],imports:['db']},
+  {id:'orch-complete',label:'completion.js',sub:'Build Handler',layer:'orchestrator',x:880,y:150,file:'orchestrator/src/completion.js',desc:'Marks projects deployed-local. Extracts URL from build log.',exports:['handleCompletion'],imports:['db']},
+  {id:'orch-notify',label:'notify.js',sub:'Webex Alerts',layer:'orchestrator',x:880,y:260,file:'orchestrator/src/notify.js',desc:'Sends stall/completion/promotion notifications via Webex REST API.',exports:['notifyStall','notifyCompletion','notifyPromotion'],imports:[]},
+  {id:'orch-digest',label:'digest.js',sub:'Evening Digest',layer:'orchestrator',x:880,y:370,file:'orchestrator/src/digest.js',desc:'Compiles day summary. Sends HTML email via Resend at configured hour.',exports:['compileDigest','sendDigest'],imports:['db']},
+  {id:'orch-promote',label:'promotion.js',sub:'Render Promotion',layer:'orchestrator',x:500,y:470,file:'orchestrator/src/promotion.js',desc:'Detects promoted status, spawns Claude with Render MCP deploy prompt.',exports:['checkPromotions'],imports:['db','spawner']},
+  {id:'orch-launcher',label:'app-launcher.js',sub:'App Startup',layer:'orchestrator',x:880,y:50,file:'orchestrator/src/app-launcher.js',desc:'Detects start strategy (start.sh, backend+frontend, server/index.js, npm start). Launches on 0.0.0.0.',exports:['launchApp'],imports:[]},
+  {id:'orch-docker',label:'dockerize.js',sub:'Dockerfile Gen',layer:'orchestrator',x:680,y:470,file:'orchestrator/src/dockerize.js',desc:'Detects project structure, generates Dockerfile. Patches CORS and static serving for production.',exports:['generateDockerfile'],imports:[]},
+
+  // Flask
+  {id:'flask-app',label:'app.py',sub:'Flask Server',layer:'flask',x:100,y:700,file:'flask-app/app.py',desc:'Flask entry point. Registers blueprints. Sets up ngrok tunnel and Webex webhook on startup.',exports:['app'],imports:['shared.db','routes/*','pyngrok','webexteamssdk']},
+  {id:'flask-select',label:'select.py',sub:'/select Route',layer:'flask',x:300,y:650,file:'flask-app/routes/select.py',desc:'GET shows today\'s ideas grouped by source. POST creates projects and enqueues them.',exports:['select_bp'],imports:['shared.db']},
+  {id:'flask-review',label:'review.py',sub:'/review Route',layer:'flask',x:300,y:750,file:'flask-app/routes/review.py',desc:'GET shows QA checklist from test-report.md. POST promotes or scraps project.',exports:['review_bp'],imports:['shared.db']},
+  {id:'flask-webex',label:'webex.py',sub:'Webhook Handler',layer:'flask',x:100,y:850,file:'flask-app/routes/webex.py',desc:'POST /webex/webhook. Validates owner, fetches message text, strips bot mention, routes to command handler.',exports:['webex_bp'],imports:['bot.commands','webexteamssdk']},
+  {id:'flask-cmds',label:'commands.py',sub:'20+ Bot Commands',layer:'flask',x:300,y:850,file:'flask-app/bot/commands.py',desc:'Routes text to handlers: status, pause, ideas, queue, promote, demote, debug, modify, rebuild, delete, archive, export, system, tokens.',exports:['handle_command'],imports:['shared.db','subprocess']},
+  {id:'flask-notif',label:'notifications.py',sub:'Outbound Webex',layer:'flask',x:100,y:950,file:'flask-app/bot/notifications.py',desc:'Sends stall/completion/promotion Webex messages from Flask context.',exports:['notify_stall','notify_completion'],imports:['requests']},
+
+  // Idea Generator
+  {id:'gen-main',label:'generate.py',sub:'Cron Entry',layer:'generator',x:1100,y:650,file:'idea-generator/generate.py',desc:'Daily cron at 7AM. Loads preferences, calls 3 providers, stores ideas, sends morning email.',exports:['main'],imports:['shared.config','shared.db','dedup','email_sender','providers/*']},
+  {id:'gen-prompt',label:'prompt.py',sub:'Prompt Builder',layer:'generator',x:1100,y:750,file:'idea-generator/prompt.py',desc:'Constructs JSON generation prompt. Injects history for dedup. Per-provider temperature tiers.',exports:['build_prompt','TEMPERATURE_TIERS'],imports:[]},
+  {id:'gen-openai',label:'openai_gen.py',sub:'GPT-4o Provider',layer:'generator',x:1300,y:650,file:'idea-generator/providers/openai_gen.py',desc:'4 calls at temps [0.3, 0.7, 1.0, 1.4]. Each batch excludes previous names.',exports:['generate'],imports:['openai','prompt']},
+  {id:'gen-gemini',label:'gemini_gen.py',sub:'Gemini Provider',layer:'generator',x:1300,y:730,file:'idea-generator/providers/gemini_gen.py',desc:'4 calls at temps [0.3, 0.7, 1.0, 1.4]. Uses google.genai SDK.',exports:['generate'],imports:['google.genai','prompt']},
+  {id:'gen-anthropic',label:'anthropic_gen.py',sub:'Claude Provider',layer:'generator',x:1300,y:810,file:'idea-generator/providers/anthropic_gen.py',desc:'4 calls at temps [0.2, 0.5, 0.8, 1.0] (capped). Uses anthropic SDK.',exports:['generate'],imports:['anthropic','prompt']},
+  {id:'gen-dedup',label:'dedup.py',sub:'History Tracker',layer:'generator',x:1100,y:850,file:'idea-generator/dedup.py',desc:'Loads past idea names from idea_history table. Records new ideas after generation.',exports:['get_history_names','record_ideas'],imports:['shared.db']},
+  {id:'gen-email',label:'email_sender.py',sub:'Morning Email',layer:'generator',x:1100,y:940,file:'idea-generator/email_sender.py',desc:'Formats 30 ideas as HTML email grouped by source. Sends via Resend API.',exports:['send_morning_email'],imports:['requests']},
+
+  // Shared
+  {id:'shared-db',label:'db.py',sub:'Python SQLite',layer:'shared',x:600,y:800,file:'shared/db.py',desc:'Thread-safe SQLite interface (threading.local). WAL mode. ALLOWED_PROJECT_FIELDS whitelist for SQL injection prevention.',exports:['get_db','ideas_insert','project_create','project_update','queue_enqueue','config_get'],imports:['sqlite3','threading']},
+  {id:'shared-config',label:'config.py',sub:'Preferences Parser',layer:'shared',x:600,y:900,file:'shared/config.py',desc:'Parses preferences.md sections into Python dict. Categories, exclusions, tech stack, design, complexity.',exports:['load_preferences','get_env'],imports:['dotenv']},
+
+  // External APIs
+  {id:'ext-webex',label:'Webex',sub:'Bot + Notifications',layer:'external',x:50,y:1100,file:'webexapis.com/v1',desc:'Messages API for bot commands and notifications. Webhooks API for registering callback URL.',exports:[],imports:[]},
+  {id:'ext-resend',label:'Resend',sub:'Email Delivery',layer:'external',x:250,y:1100,file:'api.resend.com/emails',desc:'Morning idea emails and evening digest delivery.',exports:[],imports:[]},
+  {id:'ext-openai',label:'OpenAI',sub:'GPT-4o',layer:'external',x:1400,y:950,file:'api.openai.com',desc:'Idea generation. 4 calls per run at escalating temperatures.',exports:[],imports:[]},
+  {id:'ext-gemini',label:'Gemini',sub:'2.5 Flash',layer:'external',x:1400,y:1030,file:'Google AI',desc:'Idea generation. 4 calls per run.',exports:[],imports:[]},
+  {id:'ext-anthropic',label:'Anthropic',sub:'Claude Sonnet',layer:'external',x:1400,y:1110,file:'api.anthropic.com',desc:'Idea generation. 4 calls, max temp 1.0.',exports:[],imports:[]},
+  {id:'ext-coolify',label:'Coolify',sub:'Self-Hosted PaaS',layer:'external',x:450,y:1100,file:'coolify.seanmahoney.ai',desc:'App deployment via Docker containers. API for creating apps, setting env vars, triggering builds.',exports:[],imports:[]},
+  {id:'ext-cloudflare',label:'Cloudflare',sub:'Tunnel + DNS',layer:'external',x:650,y:1100,file:'api.cloudflare.com',desc:'Tunnel ingress routes + CNAME DNS records for *.seanmahoney.ai subdomains.',exports:[],imports:[]},
+  {id:'ext-github',label:'GitHub',sub:'Code Hosting',layer:'external',x:850,y:1100,file:'github.com/seanerama',desc:'Public repos for promoted apps. Created via gh CLI on promote.',exports:[],imports:[]},
+  {id:'ext-ngrok',label:'ngrok',sub:'Webhook Tunnel',layer:'external',x:50,y:1000,file:'ngrok',desc:'Tunnels Flask port for Webex webhook callback. Free tier, URL changes on restart.',exports:[],imports:[]},
+
+  // Infrastructure
+  {id:'infra-sqlite',label:'SQLite',sub:'nsaf.db (WAL)',layer:'infra',x:450,y:550,file:'nsaf.db',desc:'Shared state store. 6 tables: ideas, idea_history, projects, queue, ports, config. Accessed by Node.js + Python.',exports:[],imports:[]},
+  {id:'infra-postgres',label:'PostgreSQL',sub:'Per-App DBs',layer:'infra',x:650,y:550,file:'localhost:5432',desc:'Shared PostgreSQL instance. Orchestrator creates nsaf_<slug> databases per project.',exports:[],imports:[]},
+  {id:'infra-claude',label:'Claude Code',sub:'Build Agent',layer:'infra',x:880,y:470,file:'claude CLI',desc:'Headless Claude Code sessions. Runs SDD pipeline autonomously. API keys stripped from env to use subscription.',exports:[],imports:[]},
+  {id:'infra-cron',label:'Cron Jobs',sub:'Scheduled Tasks',layer:'infra',x:1100,y:550,file:'crontab',desc:'7AM: idea generation. Every 2min: restart-apps.sh watchdog.',exports:[],imports:[]},
+  {id:'infra-systemd',label:'systemd',sub:'Process Manager',layer:'infra',x:250,y:550,file:'systemd services',desc:'nsaf-orchestrator.service + nsaf-flask.service. Auto-restart on failure.',exports:[],imports:[]},
+];
+
+const connections=[
+  // Orchestrator internal
+  {from:'orch-index',to:'orch-queue',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-ports',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-postgres',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-scaffold',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-spawner',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-poller',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-stall',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-complete',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-notify',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-digest',color:COLORS.orchestrator},
+  {from:'orch-index',to:'orch-promote',color:COLORS.orchestrator},
+  {from:'orch-spawner',to:'orch-launcher',color:COLORS.orchestrator},
+  {from:'orch-queue',to:'orch-db',color:COLORS.orchestrator},
+  {from:'orch-ports',to:'orch-db',color:COLORS.orchestrator},
+  {from:'orch-poller',to:'orch-db',color:COLORS.orchestrator},
+  {from:'orch-stall',to:'orch-db',color:COLORS.orchestrator},
+  {from:'orch-digest',to:'orch-db',color:COLORS.orchestrator},
+
+  // Flask internal
+  {from:'flask-app',to:'flask-select',color:COLORS.flask},
+  {from:'flask-app',to:'flask-review',color:COLORS.flask},
+  {from:'flask-app',to:'flask-webex',color:COLORS.flask},
+  {from:'flask-webex',to:'flask-cmds',color:COLORS.flask},
+  {from:'flask-cmds',to:'shared-db',color:COLORS.flask},
+  {from:'flask-select',to:'shared-db',color:COLORS.flask},
+  {from:'flask-review',to:'shared-db',color:COLORS.flask},
+
+  // Generator internal
+  {from:'gen-main',to:'gen-prompt',color:COLORS.generator},
+  {from:'gen-main',to:'gen-openai',color:COLORS.generator},
+  {from:'gen-main',to:'gen-gemini',color:COLORS.generator},
+  {from:'gen-main',to:'gen-anthropic',color:COLORS.generator},
+  {from:'gen-main',to:'gen-dedup',color:COLORS.generator},
+  {from:'gen-main',to:'gen-email',color:COLORS.generator},
+  {from:'gen-openai',to:'gen-prompt',color:COLORS.generator},
+  {from:'gen-gemini',to:'gen-prompt',color:COLORS.generator},
+  {from:'gen-anthropic',to:'gen-prompt',color:COLORS.generator},
+
+  // Cross-component: SQLite
+  {from:'orch-db',to:'infra-sqlite',color:COLORS.infra,animated:true},
+  {from:'shared-db',to:'infra-sqlite',color:COLORS.infra,animated:true},
+  {from:'gen-dedup',to:'shared-db',color:COLORS.shared},
+  {from:'gen-main',to:'shared-db',color:COLORS.shared},
+  {from:'gen-main',to:'shared-config',color:COLORS.shared},
+
+  // External API connections
+  {from:'orch-notify',to:'ext-webex',color:COLORS.external,animated:true},
+  {from:'flask-notif',to:'ext-webex',color:COLORS.external,animated:true},
+  {from:'flask-webex',to:'ext-webex',color:COLORS.external,animated:true},
+  {from:'flask-app',to:'ext-ngrok',color:COLORS.external},
+  {from:'orch-digest',to:'ext-resend',color:COLORS.external,animated:true},
+  {from:'gen-email',to:'ext-resend',color:COLORS.external,animated:true},
+  {from:'gen-openai',to:'ext-openai',color:COLORS.external,animated:true},
+  {from:'gen-gemini',to:'ext-gemini',color:COLORS.external,animated:true},
+  {from:'gen-anthropic',to:'ext-anthropic',color:COLORS.external,animated:true},
+  {from:'flask-cmds',to:'ext-coolify',color:COLORS.external,animated:true},
+  {from:'flask-cmds',to:'ext-cloudflare',color:COLORS.external,animated:true},
+  {from:'flask-cmds',to:'ext-github',color:COLORS.external,animated:true},
+
+  // Infrastructure
+  {from:'orch-postgres',to:'infra-postgres',color:COLORS.infra,animated:true},
+  {from:'orch-spawner',to:'infra-claude',color:COLORS.infra,animated:true},
+  {from:'infra-cron',to:'gen-main',color:COLORS.infra,animated:true},
+  {from:'infra-systemd',to:'orch-index',color:COLORS.infra},
+  {from:'infra-systemd',to:'flask-app',color:COLORS.infra},
+];
+
+// State
+let zoom=1,panX=0,panY=0,dragStart=null,selected=null;
+const hiddenLayers=new Set();
+const world=document.getElementById('world');
+const canvas=document.getElementById('canvas');
+const svg=document.getElementById('svg');
+
+// Render nodes
+function renderNodes(){
+  document.querySelectorAll('.node').forEach(n=>n.remove());
+  nodes.forEach(n=>{
+    if(hiddenLayers.has(n.layer))return;
+    const el=document.createElement('div');
+    el.className='node';
+    el.id='node-'+n.id;
+    el.style.cssText=`left:${n.x}px;top:${n.y}px;--c:${COLORS[n.layer]}`;
+    el.innerHTML=`<div class="title">${n.label}</div><div class="subtitle">${n.sub}</div><div class="badge">${n.layer}</div>`;
+    el.onclick=(e)=>{e.stopPropagation();selectNode(n)};
+    world.appendChild(el);
+  });
+}
+
+// Render connections
+function renderConnections(){
+  svg.innerHTML='';
+  connections.forEach(c=>{
+    const fn=nodes.find(n=>n.id===c.from);
+    const tn=nodes.find(n=>n.id===c.to);
+    if(!fn||!tn)return;
+    if(hiddenLayers.has(fn.layer)&&hiddenLayers.has(tn.layer))return;
+
+    const x1=fn.x+80,y1=fn.y+25;
+    const x2=tn.x+80,y2=tn.y+25;
+    const mx=(x1+x2)/2;
+    const d=`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d',d);
+    path.setAttribute('stroke',c.color);
+    path.dataset.from=c.from;
+    path.dataset.to=c.to;
+    if(c.animated)path.classList.add('animated');
+    svg.appendChild(path);
+  });
+}
+
+// Select node
+function selectNode(n){
+  document.querySelectorAll('.node').forEach(el=>el.classList.remove('selected'));
+  const el=document.getElementById('node-'+n.id);
+  if(el)el.classList.add('selected');
+  selected=n;
+
+  // Highlight connections
+  svg.querySelectorAll('path').forEach(p=>{
+    p.classList.toggle('highlighted',p.dataset.from===n.id||p.dataset.to===n.id);
+  });
+
+  // Detail panel
+  const connsFrom=connections.filter(c=>c.from===n.id).map(c=>nodes.find(x=>x.id===c.to)).filter(Boolean);
+  const connsTo=connections.filter(c=>c.to===n.id).map(c=>nodes.find(x=>x.id===c.from)).filter(Boolean);
+
+  let html=`<h2>${n.label}</h2><div class="subtitle" style="margin-bottom:8px">${n.sub}</div>`;
+  html+=`<div class="file">${n.file}</div>`;
+  html+=`<p style="margin:8px 0;color:#8b949e">${n.desc}</p>`;
+
+  if(n.exports&&n.exports.length){
+    html+=`<h3>Exports</h3>`;
+    n.exports.forEach(e=>html+=`<span class="tag">${e}</span>`);
+  }
+  if(connsFrom.length){
+    html+=`<h3>Connects To (${connsFrom.length})</h3>`;
+    connsFrom.forEach(t=>html+=`<div class="conn"><span style="color:${COLORS[t.layer]}">${t.label}</span> <span class="dir">${t.sub}</span></div>`);
+  }
+  if(connsTo.length){
+    html+=`<h3>Connected From (${connsTo.length})</h3>`;
+    connsTo.forEach(t=>html+=`<div class="conn"><span style="color:${COLORS[t.layer]}">${t.label}</span> <span class="dir">${t.sub}</span></div>`);
+  }
+
+  document.getElementById('detail-content').innerHTML=html;
+  document.getElementById('detail').classList.add('open');
+}
+
+function closeDetail(){
+  document.getElementById('detail').classList.remove('open');
+  document.querySelectorAll('.node').forEach(el=>el.classList.remove('selected'));
+  svg.querySelectorAll('path').forEach(p=>p.classList.remove('highlighted'));
+  selected=null;
+}
+
+// Layer toggle
+function toggleLayer(el){
+  const layer=el.dataset.layer;
+  el.classList.toggle('active');
+  if(el.classList.contains('active'))hiddenLayers.delete(layer);
+  else hiddenLayers.add(layer);
+  renderNodes();
+  renderConnections();
+}
+
+// Search
+function searchNodes(q){
+  q=q.toLowerCase();
+  document.querySelectorAll('.node').forEach(el=>{
+    const n=nodes.find(n=>'node-'+n.id===el.id);
+    if(!n)return;
+    const match=!q||n.label.toLowerCase().includes(q)||n.sub.toLowerCase().includes(q)||n.file.toLowerCase().includes(q)||(n.desc||'').toLowerCase().includes(q);
+    el.style.opacity=match?1:0.15;
+  });
+}
+
+// Pan & zoom
+canvas.addEventListener('mousedown',e=>{
+  if(e.target.closest('.node'))return;
+  dragStart={x:e.clientX-panX,y:e.clientY-panY};
+  canvas.classList.add('dragging');
+});
+canvas.addEventListener('mousemove',e=>{
+  if(!dragStart)return;
+  panX=e.clientX-dragStart.x;
+  panY=e.clientY-dragStart.y;
+  updateTransform();
+});
+canvas.addEventListener('mouseup',()=>{dragStart=null;canvas.classList.remove('dragging')});
+canvas.addEventListener('mouseleave',()=>{dragStart=null;canvas.classList.remove('dragging')});
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const delta=e.deltaY>0?0.9:1.1;
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left;
+  const my=e.clientY-rect.top;
+  panX=mx-(mx-panX)*delta;
+  panY=my-(my-panY)*delta;
+  zoom*=delta;
+  zoom=Math.max(0.3,Math.min(3,zoom));
+  updateTransform();
+},{passive:false});
+
+canvas.addEventListener('click',e=>{
+  if(!e.target.closest('.node'))closeDetail();
+});
+
+function updateTransform(){
+  world.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
+}
+
+// Init
+renderNodes();
+renderConnections();
+panX=100;panY=-20;
+updateTransform();
+</script>
+</body>
+</html>
