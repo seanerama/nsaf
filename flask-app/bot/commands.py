@@ -1051,6 +1051,108 @@ console.log(result ? 'ok' : 'failed');
     else:
         lines.append("0. Dockerfile exists")
 
+    # Step 0.5: Generate README.md
+    try:
+        readme_path = os.path.join(project_dir, "README.md")
+        idea = None
+        if project.get("idea_id"):
+            idea = idea_get(project["idea_id"])
+
+        # Gather project info
+        app_name = idea["name"] if idea else slug
+        app_desc = idea["description"] if idea else "A web application built by Nightshift AutoFoundry."
+        app_category = idea.get("category", "") if idea else ""
+        app_complexity = idea.get("complexity", "") if idea else ""
+        app_stack = ""
+        if idea and idea.get("suggested_stack"):
+            import json as _json
+            try:
+                stack = _json.loads(idea["suggested_stack"]) if isinstance(idea["suggested_stack"], str) else idea["suggested_stack"]
+                app_stack = ", ".join(f"{v}" for v in stack.values())
+            except Exception:
+                pass
+
+        subdomain_url = f"https://{slug}.{domain}"
+
+        # Scan for notable files
+        has_client = os.path.isdir(os.path.join(project_dir, "client")) or os.path.isdir(os.path.join(project_dir, "frontend"))
+        has_server = os.path.isdir(os.path.join(project_dir, "server")) or os.path.isdir(os.path.join(project_dir, "backend"))
+
+        # Read test report if available
+        test_summary = ""
+        for test_file in ["sdd-output/tests/test-report.md", "sdd-output/tests/pipeline-report.md"]:
+            tp = os.path.join(project_dir, test_file)
+            if os.path.exists(tp):
+                with open(tp) as f:
+                    content = f.read()
+                # Extract pass/fail counts
+                import re
+                match = re.search(r"(\d+).*pass", content, re.IGNORECASE)
+                if match:
+                    test_summary = f"{match.group(0)}"
+                break
+
+        # Build README
+        readme_lines = [
+            f"# {app_name}\n",
+            f"{app_desc}\n",
+            f"**Live:** [{subdomain_url}]({subdomain_url})\n",
+        ]
+
+        if app_category or app_complexity:
+            readme_lines.append(f"**Category:** {app_category} | **Complexity:** {app_complexity}\n")
+
+        if app_stack:
+            readme_lines.append(f"**Tech Stack:** {app_stack}\n")
+
+        readme_lines.append("## Getting Started\n")
+        readme_lines.append("```bash")
+        readme_lines.append("# Clone and install")
+        readme_lines.append(f"git clone https://github.com/seanerama/{slug}.git")
+        readme_lines.append(f"cd {slug}")
+        if has_server and has_client:
+            client_dir = "client" if os.path.isdir(os.path.join(project_dir, "client")) else "frontend"
+            server_dir = "server" if os.path.isdir(os.path.join(project_dir, "server")) else "backend"
+            readme_lines.append(f"cd {server_dir} && npm install && cd ../")
+            readme_lines.append(f"cd {client_dir} && npm install && cd ../")
+            readme_lines.append("")
+            readme_lines.append("# Set up environment")
+            readme_lines.append("cp .env.example .env  # Edit with your database URL")
+            readme_lines.append("")
+            readme_lines.append("# Run development")
+            readme_lines.append(f"npm --prefix {server_dir} run dev  # Backend")
+            readme_lines.append(f"npm --prefix {client_dir} run dev  # Frontend")
+        else:
+            readme_lines.append("npm install")
+            readme_lines.append("cp .env.example .env  # Edit with your config")
+            readme_lines.append("npm start")
+        readme_lines.append("```\n")
+
+        readme_lines.append("## Docker\n")
+        readme_lines.append("```bash")
+        readme_lines.append("docker build -t " + slug + " .")
+        readme_lines.append("docker run -p 3000:3000 --env-file .env " + slug)
+        readme_lines.append("```\n")
+
+        if test_summary:
+            readme_lines.append(f"## Tests\n")
+            readme_lines.append(f"{test_summary}\n")
+
+        readme_lines.append("---\n")
+        readme_lines.append("*Built by [Nightshift AutoFoundry](https://github.com/seanerama/nsaf)*")
+
+        with open(readme_path, "w") as f:
+            f.write("\n".join(readme_lines) + "\n")
+
+        subprocess.run(["git", "add", "README.md"], cwd=project_dir, capture_output=True, timeout=5)
+        subprocess.run(
+            ["git", "commit", "-m", "Add README for GitHub"],
+            cwd=project_dir, capture_output=True, timeout=10,
+        )
+        lines.append("0.5. README.md generated")
+    except Exception as e:
+        lines.append(f"0.5. README generation failed: {e}")
+
     # Step 1: Push to GitHub
     try:
         result = subprocess.run(
