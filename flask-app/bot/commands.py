@@ -41,6 +41,9 @@ def handle_command(text):
         "modify": cmd_modify,
         "archive": cmd_archive,
         "gitpush": cmd_gitpush,
+        "stopall": cmd_stopall,
+        "stop": cmd_stop,
+        "start": cmd_start,
         "system": cmd_system,
         "tokens": cmd_tokens,
         "debug": cmd_debug,
@@ -756,6 +759,150 @@ def cmd_archive(slug):
     return f"Project `{slug}` archived. Processes stopped, ports released. Files preserved at `{project.get('project_dir', '?')}`."
 
 
+def cmd_stopall(_arg):
+    """Stop all locally running deployed apps."""
+    db = get_db()
+    deployed = db.execute(
+        "SELECT slug, port_start, port_end FROM projects WHERE status = 'deployed-local' AND port_start IS NOT NULL"
+    ).fetchall()
+
+    stopped = []
+    for p in deployed:
+        killed = False
+        for port in range(p["port_start"], (p["port_end"] or p["port_start"]) + 1):
+            try:
+                result = subprocess.run(["fuser", f"{port}/tcp"], capture_output=True, text=True, timeout=5)
+                if result.stdout.strip():
+                    subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
+                    killed = True
+            except Exception:
+                pass
+        if killed:
+            stopped.append(p["slug"])
+
+    if stopped:
+        return f"**Stopped {len(stopped)} apps:**\n" + "\n".join(f"- `{s}`" for s in stopped) + "\n\nUse `start <slug>` to restart individually, or `startall` to restart all."
+    return "No running apps found."
+
+
+def cmd_stop(slug):
+    """Stop a single locally running app."""
+    if not slug:
+        return "Usage: `stop <slug>`"
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    if not project.get("port_start"):
+        return f"Project `{slug}` has no port allocated."
+
+    killed = False
+    for port in range(project["port_start"], (project.get("port_end") or project["port_start"]) + 1):
+        try:
+            result = subprocess.run(["fuser", f"{port}/tcp"], capture_output=True, text=True, timeout=5)
+            if result.stdout.strip():
+                subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
+                killed = True
+        except Exception:
+            pass
+
+    if killed:
+        return f"Stopped `{slug}` (ports {project['port_start']}-{project.get('port_end', project['port_start'])})"
+    return f"Project `{slug}` wasn't running."
+
+
+def cmd_start(slug):
+    """Start a single locally deployed app."""
+    if not slug:
+        return "Usage: `start <slug>`"
+
+    project = project_get(slug)
+    if not project:
+        return f"Project `{slug}` not found."
+
+    if project["status"] not in ("deployed-local", "reviewing"):
+        return f"Project `{slug}` is `{project['status']}` — can only start deployed apps."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{slug}` not found."
+
+    port = project.get("port_start")
+    if not port:
+        return f"Project `{slug}` has no port allocated."
+
+    # Check if already running
+    try:
+        result = subprocess.run(["fuser", f"{port}/tcp"], capture_output=True, text=True, timeout=5)
+        if result.stdout.strip():
+            return f"Project `{slug}` is already running on port {port}."
+    except Exception:
+        pass
+
+    # Use restart-apps logic to start it
+    be_port = port + 1
+
+    # Try backend
+    started_be = False
+    for be_dir_name in ["server", "backend"]:
+        be_dir = os.path.join(project_dir, be_dir_name)
+        for entry in ["index.js", "src/index.js"]:
+            entry_path = os.path.join(be_dir, entry)
+            if os.path.exists(entry_path):
+                env = {**os.environ, "PORT": str(be_port), "HOST": "0.0.0.0"}
+                subprocess.Popen(
+                    ["node", entry],
+                    cwd=be_dir, stdout=open(f"/tmp/{slug}-server.log", "w"),
+                    stderr=subprocess.STDOUT, env=env,
+                )
+                started_be = True
+                break
+        if started_be:
+            break
+
+    # Try frontend
+    started_fe = False
+    for fe_dir_name in ["client", "frontend"]:
+        fe_dir = os.path.join(project_dir, fe_dir_name)
+        if os.path.isdir(fe_dir) and os.path.exists(os.path.join(fe_dir, "package.json")):
+            subprocess.Popen(
+                ["npx", "vite", "--host", "0.0.0.0", "--port", str(port)],
+                cwd=fe_dir, stdout=open(f"/tmp/{slug}-client.log", "w"),
+                stderr=subprocess.STDOUT,
+            )
+            started_fe = True
+            break
+
+    # Fallback: server-only on main port
+    if not started_fe and not started_be:
+        for entry in [
+            os.path.join(project_dir, "server", "index.js"),
+            os.path.join(project_dir, "server", "src", "index.js"),
+            os.path.join(project_dir, "index.js"),
+        ]:
+            if os.path.exists(entry):
+                env = {**os.environ, "PORT": str(port), "HOST": "0.0.0.0"}
+                subprocess.Popen(
+                    ["node", os.path.basename(entry)],
+                    cwd=os.path.dirname(entry),
+                    stdout=open(f"/tmp/{slug}.log", "w"),
+                    stderr=subprocess.STDOUT, env=env,
+                )
+                started_be = True
+                break
+
+    parts = []
+    if started_be:
+        parts.append(f"backend on :{be_port}" if started_fe else f"server on :{port}")
+    if started_fe:
+        parts.append(f"frontend on :{port}")
+
+    if parts:
+        return f"Started `{slug}`: {', '.join(parts)}"
+    return f"Could not determine how to start `{slug}`. Check project structure."
+
+
 def cmd_gitpush(slug):
     """Push a project to a public GitHub repo."""
     if not slug:
@@ -1300,10 +1447,15 @@ def cmd_help(_arg):
 **Lifecycle**
 - `promote <slug>` — Push to GitHub + deploy via Coolify to *.seanmahoney.ai
 - `demote <slug>` — Remove from Coolify, revert to local
-- `archive <slug>` — Stop locally, keep files
+- `archive <slug>` — Stop locally, release ports, keep files
 - `delete <id> [id...]` — Permanently delete projects
 - `gitpush <slug>` — Push to a public GitHub repo
 - `export` — Download CSV of all projects
+
+**App Control**
+- `stop <slug>` — Stop a running local app
+- `start <slug>` — Start a stopped local app
+- `stopall` — Stop all running local apps
 
 **Troubleshooting**
 - `debug <slug> <problem>` — Diagnose and fix a deployed app
