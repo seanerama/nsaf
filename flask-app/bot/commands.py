@@ -41,6 +41,7 @@ def handle_command(text):
         "modify": cmd_modify,
         "archive": cmd_archive,
         "gitpush": cmd_gitpush,
+        "sws": cmd_sws,
         "stopall": cmd_stopall,
         "stop": cmd_stop,
         "start": cmd_start,
@@ -759,6 +760,94 @@ def cmd_archive(slug):
     return f"Project `{slug}` archived. Processes stopped, ports released. Files preserved at `{project.get('project_dir', '?')}`."
 
 
+def cmd_sws(arg):
+    """Generate a StudyWS learning package for a topic."""
+    if not arg:
+        return "Usage: `sws <topic> [options]`\nExample: `sws Kubernetes Networking`\nExample: `sws Machine Learning --chapters 12 --level beginner`"
+
+    # Parse topic and optional flags
+    import re
+    chapters = 10
+    level = "intermediate"
+    notes = ""
+
+    # Extract --chapters N
+    ch_match = re.search(r'--chapters\s+(\d+)', arg)
+    if ch_match:
+        chapters = int(ch_match.group(1))
+        arg = arg[:ch_match.start()] + arg[ch_match.end():]
+
+    # Extract --level <level>
+    lv_match = re.search(r'--level\s+(\w+)', arg)
+    if lv_match:
+        level = lv_match.group(1)
+        arg = arg[:lv_match.start()] + arg[lv_match.end():]
+
+    # Extract --notes "..."
+    nt_match = re.search(r'--notes\s+"([^"]+)"', arg)
+    if not nt_match:
+        nt_match = re.search(r'--notes\s+(\S+)', arg)
+    if nt_match:
+        notes = nt_match.group(1)
+        arg = arg[:nt_match.start()] + arg[nt_match.end():]
+
+    topic = arg.strip()
+    if not topic:
+        return "Please provide a topic. Example: `sws Kubernetes Networking`"
+
+    # Create slug from topic
+    slug = re.sub(r'[^a-z0-9]+', '-', topic.lower()).strip('-')[:60]
+    slug = f"sws-{slug}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, slug)
+
+    # Check if already exists
+    existing = project_get(slug)
+    if existing:
+        return f"StudyWS project `{slug}` already exists ({existing['status']}). Use `rebuild {slug}` to regenerate."
+
+    # Create project directory and config
+    os.makedirs(project_dir, exist_ok=True)
+    import json as _json
+    config = {
+        "topic": topic,
+        "chapters": chapters,
+        "level": level,
+        "notes": notes,
+    }
+    with open(os.path.join(project_dir, "studyws-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    # Create project in DB with type=studyws
+    import sqlite3
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'studyws', 'queued')",
+            (slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return f"Project `{slug}` already exists."
+
+    queue_enqueue(pid)
+
+    lines = [
+        f"**StudyWS project queued: `{slug}`**\n",
+        f"**Topic:** {topic}",
+        f"**Chapters:** {chapters}",
+        f"**Level:** {level}",
+    ]
+    if notes:
+        lines.append(f"**Notes:** {notes}")
+    lines.append(f"\nWill produce: textbook, interactive study guides, slide descriptions, podcast prompt.")
+    lines.append(f"Building will start when a slot opens.")
+
+    return "\n".join(lines)
+
+
 def cmd_stopall(_arg):
     """Stop all locally running deployed apps."""
     db = get_db()
@@ -1451,6 +1540,10 @@ def cmd_help(_arg):
 - `delete <id> [id...]` — Permanently delete projects
 - `gitpush <slug>` — Push to a public GitHub repo
 - `export` — Download CSV of all projects
+
+**Content Generation**
+- `sws <topic>` — Generate a textbook + study guides for a topic
+- `sws <topic> --chapters 12 --level beginner` — With options
 
 **App Control**
 - `stop <slug>` — Stop a running local app

@@ -29,32 +29,61 @@ export function spawnSession(project, claudeCommandTemplate) {
   const slug = project.slug;
   const dir = project.project_dir;
 
-  // Read the vision document for context
-  let visionContext = '';
-  try {
-    const visionPath = join(dir, 'sdd-output', 'vision-document.md');
-    visionContext = readFileSync(visionPath, 'utf-8');
-  } catch { /* no vision doc */ }
+  const projectType = project.project_type || 'app';
+  let prompt;
 
-  // Build tool-aware prompt
-  const tools = getDetectedTools();
-  let toolNote = '';
-  if (tools.tools.length > 0) {
-    const artTools = tools.categories.art_generation || [];
-    const deployTools = tools.categories.deployment || [];
-    const lines = ['AVAILABLE MCP TOOLS — use these where the vision document instructs:'];
-    if (artTools.length > 0) lines.push(`- Art generation: ${artTools.join(', ')} (mcp__<name>__* tool calls)`);
-    if (deployTools.length > 0) lines.push(`- Deployment: ${deployTools.join(', ')}`);
-    toolNote = lines.join('\n') + '\n\n';
-  }
+  if (projectType === 'studyws') {
+    // StudyWS content generation
+    let swsConfig = '';
+    try {
+      swsConfig = readFileSync(join(dir, 'studyws-config.json'), 'utf-8');
+    } catch { /* no config */ }
 
-  const prompt = `You are building a web app autonomously with NO human interaction. Read sdd-output/vision-document.md for the full spec. Do NOT ask any questions — make all decisions yourself based on the vision document and preferences. Build the complete app end-to-end.
+    const config = swsConfig ? JSON.parse(swsConfig) : {};
+    const topic = config.topic || project.slug;
+    const chapters = config.chapters || 10;
+    const level = config.level || 'intermediate';
+    const notes = config.notes || '';
+
+    prompt = `You are generating a complete learning package autonomously with NO human interaction. Do NOT ask any questions — make all decisions yourself.
+
+Topic: ${topic}
+Chapters: ${chapters}
+Level: ${level}${notes ? `\nNotes: ${notes}` : ''}
+
+Run the full StudyWS pipeline:
+1. Run /sws:start — when prompted for a topic, use "${topic}". Set level to "${level}". Set chapters to ${chapters}.
+2. The pipeline will auto-chain through scope → research → write → diagrams → guide → slides → podcast.
+3. Do NOT stop between stages. Let each stage auto-invoke the next.
+4. If any stage asks for input, make reasonable decisions autonomously.`;
+
+  } else {
+    // Standard app build
+    let visionContext = '';
+    try {
+      const visionPath = join(dir, 'sdd-output', 'vision-document.md');
+      visionContext = readFileSync(visionPath, 'utf-8');
+    } catch { /* no vision doc */ }
+
+    const tools = getDetectedTools();
+    let toolNote = '';
+    if (tools.tools.length > 0) {
+      const artTools = tools.categories.art_generation || [];
+      const deployTools = tools.categories.deployment || [];
+      const lines = ['AVAILABLE MCP TOOLS — use these where the vision document instructs:'];
+      if (artTools.length > 0) lines.push(`- Art generation: ${artTools.join(', ')} (mcp__<name>__* tool calls)`);
+      if (deployTools.length > 0) lines.push(`- Deployment: ${deployTools.join(', ')}`);
+      toolNote = lines.join('\n') + '\n\n';
+    }
+
+    prompt = `You are building a web app autonomously with NO human interaction. Read sdd-output/vision-document.md for the full spec. Do NOT ask any questions — make all decisions yourself based on the vision document and preferences. Build the complete app end-to-end.
 
 ${toolNote}Here is the vision document:
 
 ${visionContext}
 
 Now run: /sdd:start --from architect`;
+  }
 
   // Build args directly instead of string splitting to preserve quoted prompt
   const bin = claudeCommandTemplate.split(/\s+/)[0];
@@ -96,42 +125,90 @@ Now run: /sdd:start --from architect`;
 
     log.info({ slug, code, signal }, 'Claude Code session exited');
 
-    // Check if the build actually completed by looking for deployer artifacts
-    let completed = false;
-    try {
-      const statePath = join(dir, 'sdd-output', 'STATE.md');
-      const stateContent = readFileSync(statePath, 'utf-8');
-      if (stateContent.includes('Project Deployer') &&
-          (stateContent.includes('[x] Project Deployer') ||
-           stateContent.match(/completed_roles:.*Project Deployer/))) {
-        completed = true;
-      }
-      // Also check build log for completion markers
-      const buildLog = readFileSync(join(dir, 'build.log'), 'utf-8');
-      if (buildLog.includes('Workflow Complete') || buildLog.includes('workflow complete')) {
-        completed = true;
-      }
-    } catch { /* can't read files */ }
-
-    // Re-read project from DB to get current port_start (set after dequeue)
+    // Re-read project from DB to get current state
     const currentProject = projectGet(slug) || project;
-    const portStart = currentProject.port_start;
+    const currentType = currentProject.project_type || 'app';
 
-    if (completed || code === 0) {
-      // Auto-launch the app
-      const launched = launchApp(dir, portStart);
-      const deployedUrl = launched ? launched.url : `http://localhost:${portStart}`;
+    if (currentType === 'studyws') {
+      // StudyWS completion: check for textbook.md in any output subdirectory
+      let completed = false;
+      try {
+        const { readdirSync, existsSync: ex } = await import('fs');
+        const outputDir = join(dir, 'output');
+        if (ex(outputDir)) {
+          const subdirs = readdirSync(outputDir, { withFileTypes: true }).filter(d => d.isDirectory());
+          for (const sub of subdirs) {
+            if (ex(join(outputDir, sub.name, 'textbook.md'))) {
+              completed = true;
+              break;
+            }
+          }
+        }
+        // Also check build log
+        try {
+          const buildLog = readFileSync(join(dir, 'build.log'), 'utf-8');
+          if (buildLog.includes('pipeline') && buildLog.includes('complete')) completed = true;
+        } catch {}
+      } catch {}
 
-      projectUpdate(slug, {
-        status: 'deployed-local',
-        deployed_url: deployedUrl,
-        completed_at: new Date().toISOString(),
-        last_state_change: new Date().toISOString(),
-      });
-      log.info({ slug, deployedUrl, strategy: launched?.strategy, completed }, 'Build finished and app launched');
-      log.warn({ slug }, 'Session exited clean but completion not confirmed');
+      if (completed || code === 0) {
+        // Find the output directory for the URL
+        let outputPath = dir;
+        try {
+          const { readdirSync, existsSync: ex } = await import('fs');
+          const outputDir = join(dir, 'output');
+          if (ex(outputDir)) {
+            const subdirs = readdirSync(outputDir, { withFileTypes: true }).filter(d => d.isDirectory());
+            if (subdirs.length > 0) outputPath = join(outputDir, subdirs[0].name);
+          }
+        } catch {}
+
+        projectUpdate(slug, {
+          status: 'deployed-local',
+          deployed_url: outputPath,
+          completed_at: new Date().toISOString(),
+          last_state_change: new Date().toISOString(),
+          sdd_phase: 'complete',
+          sdd_progress: 100,
+        });
+        log.info({ slug, outputPath }, 'StudyWS content generation complete');
+      } else {
+        log.warn({ slug, code }, 'StudyWS session exited with error');
+      }
+
     } else {
-      log.warn({ slug, code }, 'Session exited with error');
+      // Standard app completion check
+      let completed = false;
+      try {
+        const statePath = join(dir, 'sdd-output', 'STATE.md');
+        const stateContent = readFileSync(statePath, 'utf-8');
+        if (stateContent.includes('Project Deployer') &&
+            (stateContent.includes('[x] Project Deployer') ||
+             stateContent.match(/completed_roles:.*Project Deployer/))) {
+          completed = true;
+        }
+        const buildLog = readFileSync(join(dir, 'build.log'), 'utf-8');
+        if (buildLog.includes('Workflow Complete') || buildLog.includes('workflow complete')) {
+          completed = true;
+        }
+      } catch { /* can't read files */ }
+
+      const portStart = currentProject.port_start;
+
+      if (completed || code === 0) {
+        const launched = launchApp(dir, portStart);
+        const deployedUrl = launched ? launched.url : `http://localhost:${portStart}`;
+
+        projectUpdate(slug, {
+          status: 'deployed-local',
+          deployed_url: deployedUrl,
+          completed_at: new Date().toISOString(),
+          last_state_change: new Date().toISOString(),
+        });
+        log.info({ slug, deployedUrl, strategy: launched?.strategy, completed }, 'Build finished and app launched');
+      } else {
+        log.warn({ slug, code }, 'Session exited with error');
+      }
     }
   });
 

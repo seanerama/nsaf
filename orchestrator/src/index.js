@@ -62,39 +62,55 @@ async function processQueue() {
     if (!item) break;
 
     const slug = item.slug;
-    log.info({ slug, queueDepth: getQueueDepth(), active: getActiveCount() }, 'Dequeued project');
+    const projectType = item.project_type || 'app';
+    log.info({ slug, projectType, queueDepth: getQueueDepth(), active: getActiveCount() }, 'Dequeued project');
 
     try {
-      // Allocate ports
-      const ports = allocatePorts(item.id, config.portRangeStart, config.portRangeEnd);
-      projectUpdate(slug, { port_start: ports.portStart, port_end: ports.portEnd });
-      log.info({ slug, ports }, 'Ports allocated');
+      if (projectType === 'studyws') {
+        // StudyWS: no ports, no database, no scaffold — just create dir and spawn
+        const { mkdirSync } = await import('fs');
+        mkdirSync(item.project_dir, { recursive: true });
 
-      // Provision database
-      let dbInfo = null;
-      try {
-        dbInfo = createDatabase(slug, config.pgHost, config.pgPort, config.pgUser, config.pgPassword);
-        projectUpdate(slug, { db_name: dbInfo.dbName });
-        log.info({ slug, dbName: dbInfo.dbName }, 'Database provisioned');
-      } catch (err) {
-        log.warn({ slug, error: err.message }, 'Database provisioning failed — continuing without DB');
+        const project = { ...item, project_dir: item.project_dir, project_type: projectType };
+        spawnSession(project, config.claudeCommand);
+        log.info({ slug }, 'StudyWS session spawned');
+
+      } else {
+        // Standard app build
+        // Allocate ports
+        const ports = allocatePorts(item.id, config.portRangeStart, config.portRangeEnd);
+        projectUpdate(slug, { port_start: ports.portStart, port_end: ports.portEnd });
+        log.info({ slug, ports }, 'Ports allocated');
+
+        // Provision database
+        let dbInfo = null;
+        try {
+          dbInfo = createDatabase(slug, config.pgHost, config.pgPort, config.pgUser, config.pgPassword);
+          projectUpdate(slug, { db_name: dbInfo.dbName });
+          log.info({ slug, dbName: dbInfo.dbName }, 'Database provisioned');
+        } catch (err) {
+          log.warn({ slug, error: err.message }, 'Database provisioning failed — continuing without DB');
+        }
+
+        // Scaffold project
+        const project = { ...item, project_dir: item.project_dir };
+        scaffoldProject(project, ports, dbInfo, {
+          portStart: ports.portStart,
+          portEnd: ports.portEnd,
+        });
+
+        // Spawn Claude Code session
+        spawnSession(project, config.claudeCommand);
       }
-
-      // Scaffold project
-      const project = { ...item, project_dir: item.project_dir };
-      scaffoldProject(project, ports, dbInfo, {
-        portStart: ports.portStart,
-        portEnd: ports.portEnd,
-      });
-
-      // Spawn Claude Code session
-      spawnSession(project, config.claudeCommand);
 
     } catch (err) {
       log.error({ slug, error: err.message }, 'Failed to launch project');
-      // Release ports and re-enqueue so it can be retried
-      releasePorts(item.id);
-      projectUpdate(slug, { status: 'queued', port_start: null, port_end: null });
+      if (projectType !== 'studyws') {
+        releasePorts(item.id);
+        projectUpdate(slug, { status: 'queued', port_start: null, port_end: null });
+      } else {
+        projectUpdate(slug, { status: 'queued' });
+      }
       queueEnqueue(item.id);
     }
   }

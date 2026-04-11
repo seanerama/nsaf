@@ -30,6 +30,7 @@ const SCHEMA = `
     idea_id INTEGER REFERENCES ideas(id),
     slug TEXT UNIQUE NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
+    project_type TEXT DEFAULT 'app',
     port_start INTEGER,
     port_end INTEGER,
     db_name TEXT,
