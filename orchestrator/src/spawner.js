@@ -44,13 +44,26 @@ export function spawnSession(project, claudeCommandTemplate) {
     const chapters = config.chapters || 10;
     const level = config.level || 'intermediate';
     const notes = config.notes || '';
+    const sourceUrl = config.source_url || '';
+
+    let sourceInstructions = '';
+    if (sourceUrl) {
+      sourceInstructions = `
+IMPORTANT — Source Material:
+Before running the pipeline, fetch and read this document: ${sourceUrl}
+Use it as the primary source for structuring the chapters and content.
+The topic name and chapter outline should be derived from this document's content.
+If it's a PDF, use WebFetch or download it to read its contents.
+After reading the source, use its structure to inform the /sws:start topic and /sws:scope outline.
+`;
+    }
 
     prompt = `You are generating a complete learning package autonomously with NO human interaction. Do NOT ask any questions — make all decisions yourself.
 
 Topic: ${topic}
 Chapters: ${chapters}
 Level: ${level}${notes ? `\nNotes: ${notes}` : ''}
-
+${sourceInstructions}
 Run the full StudyWS pipeline:
 1. Run /sws:start — when prompted for a topic, use "${topic}". Set level to "${level}". Set chapters to ${chapters}.
 2. The pipeline will auto-chain through scope → research → write → diagrams → guide → slides → podcast.

@@ -770,6 +770,13 @@ def cmd_sws(arg):
     chapters = 10
     level = "intermediate"
     notes = ""
+    source_url = ""
+
+    # Extract URLs from the argument
+    url_match = re.search(r'(https?://\S+)', arg)
+    if url_match:
+        source_url = url_match.group(1)
+        arg = arg[:url_match.start()] + arg[url_match.end():]
 
     # Extract --chapters N
     ch_match = re.search(r'--chapters\s+(\d+)', arg)
@@ -792,8 +799,17 @@ def cmd_sws(arg):
         arg = arg[:nt_match.start()] + arg[nt_match.end():]
 
     topic = arg.strip()
+
+    # If only a URL was provided, derive topic from the URL
+    if not topic and source_url:
+        # Extract filename or path as topic hint
+        from urllib.parse import urlparse
+        path = urlparse(source_url).path
+        filename = path.split('/')[-1].replace('.pdf', '').replace('.html', '').replace('_', ' ').replace('-', ' ')
+        topic = filename if filename else "Study Material"
+
     if not topic:
-        return "Please provide a topic. Example: `sws Kubernetes Networking`"
+        return "Please provide a topic or URL. Example: `sws Kubernetes Networking` or `sws https://example.com/syllabus.pdf`"
 
     # Create slug from topic
     slug = re.sub(r'[^a-z0-9]+', '-', topic.lower()).strip('-')[:60]
@@ -815,6 +831,7 @@ def cmd_sws(arg):
         "chapters": chapters,
         "level": level,
         "notes": notes,
+        "source_url": source_url,
     }
     with open(os.path.join(project_dir, "studyws-config.json"), "w") as f:
         _json.dump(config, f, indent=2)
@@ -840,6 +857,8 @@ def cmd_sws(arg):
         f"**Chapters:** {chapters}",
         f"**Level:** {level}",
     ]
+    if source_url:
+        lines.append(f"**Source:** {source_url}")
     if notes:
         lines.append(f"**Notes:** {notes}")
     lines.append(f"\nWill produce: textbook, interactive study guides, slide descriptions, podcast prompt.")
@@ -1543,6 +1562,7 @@ def cmd_help(_arg):
 
 **Content Generation**
 - `sws <topic>` — Generate a textbook + study guides for a topic
+- `sws <url>` — Generate from a PDF/document (e.g. exam blueprint)
 - `sws <topic> --chapters 12 --level beginner` — With options
 
 **App Control**
