@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { createWriteStream, readFileSync } from 'fs';
+import { createWriteStream, readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import pino from 'pino';
 import { projectUpdate, projectGet } from './db.js';
@@ -133,7 +133,7 @@ Now run: /sdd:start --from architect`;
       // StudyWS completion: check for textbook.md in any output subdirectory
       let completed = false;
       try {
-        const { readdirSync, existsSync: ex } = await import('fs');
+        const ex = existsSync;
         const outputDir = join(dir, 'output');
         if (ex(outputDir)) {
           const subdirs = readdirSync(outputDir, { withFileTypes: true }).filter(d => d.isDirectory());
@@ -155,7 +155,7 @@ Now run: /sdd:start --from architect`;
         // Find the output directory for the URL
         let outputPath = dir;
         try {
-          const { readdirSync, existsSync: ex } = await import('fs');
+          const ex = existsSync;
           const outputDir = join(dir, 'output');
           if (ex(outputDir)) {
             const subdirs = readdirSync(outputDir, { withFileTypes: true }).filter(d => d.isDirectory());
