@@ -4,15 +4,42 @@
 
 # Nightshift AutoFoundry (NSAF)
 
-A personal app factory that generates, builds, and deploys web applications autonomously. Every morning, AI surfaces curated app ideas. You pick the ones you like. NSAF handles the rest — speccing, coding, testing, and deploying each one without human intervention.
+A personal content factory that autonomously generates web applications, textbooks, and study guides. Every morning, AI surfaces curated app ideas. You pick the ones you like. NSAF handles the rest — speccing, coding, testing, and deploying each one without human intervention. Need a textbook instead? Just tell the Webex bot a topic and NSAF generates a complete learning package.
 
 ## How It Works
 
+### Apps
 1. **Morning ideas** — A cron job generates 30 app ideas from three AI models (OpenAI, Gemini, Anthropic) using tiered temperature sampling for a mix of practical and experimental concepts
 2. **You select** — Browse the ideas in a web UI or via Webex and pick the ones you want built
 3. **NSAF builds** — The orchestrator queues your selections and spawns autonomous Claude Code sessions that build each app through a full spec-driven development pipeline
 4. **You review** — Finished apps are deployed locally with a QA checklist. Approve, modify, or rebuild them through the Webex chatbot
-5. **Promote to production** — Approved apps are deployed to Render with a single command
+5. **Promote to production** — Approved apps are deployed via Coolify to `*.seanmahoney.ai` subdomains
+
+### Textbooks & Study Guides (StudyWS Integration)
+1. **You name a topic** — Send `sws <topic>` via Webex, optionally with a source URL (PDF, syllabus, exam blueprint)
+2. **NSAF generates** — Spawns a Claude Code session running the [StudyWS](https://www.npmjs.com/package/studyws) pipeline
+3. **Full learning package** — Produces a textbook, interactive HTML study guides with quizzes, slide descriptions, and a podcast prompt
+
+```
+sws Kubernetes Networking
+sws CCDE v3 Exam Prep https://example.com/exam-topics.pdf --chapters 15 --level advanced
+sws Machine Learning --chapters 8 --level beginner
+```
+
+#### StudyWS Output
+```
+output/<topic-slug>/
+├── config.json           # Topic metadata
+├── outline.json          # Chapter hierarchy
+├── research/             # Perplexity research per chapter
+├── chapters/             # Written chapters with diagrams
+├── textbook.md           # Full textbook with table of contents
+├── guides/               # Interactive HTML study guides (open in browser)
+├── slides.md             # Slide descriptions for deck creation
+└── podcast-prompt.md     # Podcast generation prompt
+```
+
+Each study guide is a self-contained HTML file with pre/post quizzes, score comparison, key points, and Mermaid diagrams — open directly in a browser.
 
 ## Idea Generation & Temperature Tiers
 
@@ -32,31 +59,34 @@ Ideas are tagged with their tier so you can filter and sort by creativity level 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Ubuntu Server                   │
-│                                                  │
-│  Cron ──→ Idea Generator (Python)               │
-│              ↓                                   │
-│  Flask App (Python)                              │
-│    ├── Idea selection UI                         │
-│    ├── QA review pages                           │
-│    └── Webex chatbot                             │
-│              ↓ (SQLite)                          │
-│  Orchestrator (Node.js)                          │
-│    ├── Queue manager                             │
-│    ├── Port allocator (5020-5999)                │
-│    ├── PostgreSQL provisioner                    │
-│    ├── Session spawner (Claude Code)             │
-│    ├── State monitor + stall detection           │
-│    ├── App auto-launcher                         │
-│    └── Evening digest                            │
-│              ↓                                   │
-│  Local deployments ──→ Render (on promotion)     │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                  Ubuntu Server                       │
+│                                                      │
+│  Cron ──→ Idea Generator (Python)                   │
+│              ↓                                       │
+│  Flask App (Python)                                  │
+│    ├── Idea selection UI                             │
+│    ├── QA review pages                               │
+│    └── Webex chatbot ──→ sws <topic> (StudyWS)      │
+│              ↓ (SQLite)                              │
+│  Orchestrator (Node.js)                              │
+│    ├── Queue manager                                 │
+│    ├── Port allocator (5020-5999)                    │
+│    ├── PostgreSQL provisioner                        │
+│    ├── Session spawner (Claude Code)                 │
+│    │   ├── App builds (/sdd:start)                   │
+│    │   └── Content builds (/sws:start)               │
+│    ├── State monitor + stall detection               │
+│    ├── App auto-launcher                             │
+│    └── Evening digest                                │
+│              ↓                                       │
+│  Apps: local deploy ──→ Coolify (on promotion)       │
+│  Content: output/ directory with textbook + guides   │
+└─────────────────────────────────────────────────────┘
 ```
 
 NSAF is three processes communicating through a shared SQLite database:
-- **Orchestrator** (Node.js) — manages the build queue, spawns coding sessions, monitors progress, auto-launches finished apps
+- **Orchestrator** (Node.js) — manages the build queue, spawns coding sessions (SDD for apps, StudyWS for content), monitors progress, auto-launches finished apps
 - **Flask App** (Python) — serves the idea selection UI, QA pages, and Webex bot
 - **Idea Generator** (Python) — runs daily via cron to produce ideas and send the morning email
 
@@ -67,10 +97,12 @@ NSAF is three processes communicating through a shared SQLite database:
 - Python 3.12+
 - PostgreSQL 15+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installed, authenticated, and licensed
+- [StudyWS](https://www.npmjs.com/package/studyws) — installed globally for content generation (`npm i -g studyws && sws setup`)
 - Webex bot token (create at [developer.webex.com](https://developer.webex.com))
 - [ngrok](https://ngrok.com) account (for Webex webhook tunneling)
 - [Resend](https://resend.com) account for email delivery
 - API keys for OpenAI, Google (Gemini), and Anthropic
+- [Perplexity API key](https://www.perplexity.ai/settings/api) (for StudyWS research, ~$0.006/query)
 
 ## Quick Start
 
@@ -103,8 +135,9 @@ NSAF detects MCP tools configured in your Claude Code environment and automatica
 | **Render** | Deployment | Deploys promoted apps to Render via `mcp__render__*` tools |
 | **PixelLab** | Art Generation | Generates pixel art sprites, characters, tiles, and animations for games |
 | **Leonardo AI** | Art Generation | Generates illustrations, backgrounds, icons, and UI art |
-| **Cloudflare** | Infrastructure | Available for DNS, Workers, R2, and other Cloudflare services |
+| **Cloudflare** | Infrastructure | Tunnel routes + DNS for `*.seanmahoney.ai` subdomains |
 | **GitHub** | Code Hosting | Repository management and PR creation |
+| **Perplexity** | Research | StudyWS uses Perplexity MCP for chapter research |
 
 Games automatically get PixelLab sprites + Leonardo backgrounds. Non-game apps get Leonardo for optional hero images and branding. Only tools detected in your Claude Code config are referenced in build prompts — if you don't have PixelLab configured, builds won't try to use it.
 
@@ -129,6 +162,7 @@ Key settings:
 | `NSAF_STALL_TIMEOUT_MINUTES` | Minutes before a build is flagged as stalled | `30` |
 | `NSAF_PROJECTS_DIR` | Where generated projects are stored | `./projects` |
 | `NGROK_AUTHTOKEN` | ngrok auth token for Webex webhook tunneling | — |
+| `COOLIFY_API_URL` | Coolify instance URL for promotion deployments | — |
 
 ### Preferences
 
@@ -174,6 +208,7 @@ Control Nightshift AutoFoundry from your phone or desktop through Webex. Works i
 |---------|-------------|
 | `status` | Queue depth, active builds, deployed apps with URLs |
 | `pause` | Stop pulling new projects from the queue |
+| `pause all` | Emergency stop: pause queue + kill all active Claude sessions |
 | `resume` | Resume pulling from the queue |
 | `skip <slug>` | Remove a project and mark as scrapped |
 | `restart <slug>` | Re-queue a stalled or failed project |
@@ -191,16 +226,33 @@ Control Nightshift AutoFoundry from your phone or desktop through Webex. Works i
 | `queue <id>` | Add an idea to the build queue |
 | `generate` | Trigger a fresh round of idea generation |
 
+### Content Generation (StudyWS)
+
+| Command | Description |
+|---------|-------------|
+| `sws <topic>` | Generate a textbook + study guides for a topic |
+| `sws <url>` | Generate from a PDF/document (exam blueprint, syllabus, etc.) |
+| `sws <topic> --chapters 12 --level beginner` | With options |
+| `sws <topic> <url> --level advanced` | Topic + source document + options |
+
 ### Lifecycle
 
 | Command | Description |
 |---------|-------------|
-| `promote <slug>` | Deploy a locally-tested app to Render |
-| `demote <slug>` | Remove from Render, revert to local-only |
+| `promote <slug>` | Push to GitHub + deploy via Coolify to `*.seanmahoney.ai` |
+| `demote <slug>` | Remove from Coolify, revert to local-only |
 | `archive <slug>` | Stop running locally, release ports, keep files |
 | `delete <id or slug> [...]` | Permanently delete one or more projects |
 | `gitpush <slug>` | Push a project to a new public GitHub repo |
 | `export` | Download a CSV of all ideas and projects |
+
+### App Control
+
+| Command | Description |
+|---------|-------------|
+| `stop <slug>` | Stop a running local app |
+| `start <slug>` | Start a stopped local app |
+| `stopall` | Stop all running local apps |
 
 ### Troubleshooting
 
@@ -216,9 +268,20 @@ Control Nightshift AutoFoundry from your phone or desktop through Webex. Works i
 | `tokens [hours]` | Build activity and costs for the last N hours (default 24) |
 | `help` | Show all available commands |
 
+## Project Types
+
+NSAF handles two types of projects through the same queue:
+
+| Type | Trigger | Build Pipeline | Output |
+|------|---------|---------------|--------|
+| **App** | `queue <id>` or idea selection UI | SDD (Spec-Driven DevOps) | Running web app on allocated port |
+| **StudyWS** | `sws <topic>` | StudyWS pipeline | Textbook, study guides, slides, podcast prompt |
+
+App projects get port allocation, PostgreSQL provisioning, and auto-launching. StudyWS projects skip all infrastructure and just produce files.
+
 ## Project Lifecycle
 
-Each app moves through these states:
+Each project moves through these states:
 
 ```
 queued → building → deployed-local → reviewing → promoted
@@ -227,12 +290,26 @@ queued → building → deployed-local → reviewing → promoted
 ```
 
 - **queued** — Waiting for a build slot
-- **building** — Claude Code session is running the full SDD pipeline
-- **deployed-local** — Build complete, app running on the server for QA
+- **building** — Claude Code session running (SDD pipeline for apps, StudyWS for content)
+- **deployed-local** — Build complete. Apps are running on the server. Content is in the output directory.
 - **reviewing** — You're testing it with the QA checklist
-- **promoted** — Deployed to Render
+- **promoted** — Deployed via Coolify to `*.seanmahoney.ai`
 - **archived** — Stopped locally, ports released, files preserved
 - **scrapped** — Rejected and cleaned up
+
+## Promotion Pipeline
+
+When you run `promote <slug>`, NSAF automates the full deployment:
+
+1. **Dockerfile generated** — Auto-detects project structure (fullstack-split, server-only, static)
+2. **Server patched** — Fixes CORS, adds static file serving, adjusts ports for production
+3. **README generated** — App name, description, live URL, setup instructions
+4. **Pushed to GitHub** — Creates public repo at `seanerama/<slug>`
+5. **Coolify app created** — Connects repo, sets Dockerfile build pack
+6. **Environment variables set** — DATABASE_URL, PORT, NODE_ENV, CORS_ORIGIN
+7. **Build triggered** — Coolify builds Docker image and starts container
+8. **Cloudflare tunnel route added** — `<slug>.seanmahoney.ai` → Traefik (HTTPS, noTLSVerify)
+9. **DNS CNAME created** — Points subdomain to tunnel
 
 ## Notifications
 
@@ -267,8 +344,9 @@ nsaf/
 │   │   ├── ports.js        # Port allocation
 │   │   ├── postgres.js     # Per-app database provisioning
 │   │   ├── scaffolder.js   # Project directory setup + vision doc generation
-│   │   ├── spawner.js      # Claude Code session launcher
+│   │   ├── spawner.js      # Claude Code session launcher (SDD + StudyWS)
 │   │   ├── app-launcher.js # Auto-start apps after build completion
+│   │   ├── dockerize.js    # Dockerfile generation for promotion
 │   │   ├── poller.js       # STATE.md polling
 │   │   ├── stall.js        # Stall detection
 │   │   ├── completion.js   # Build completion handler
@@ -279,7 +357,7 @@ nsaf/
 ├── flask-app/              # Python — web UI + Webex bot
 │   ├── app.py              # Flask entry + ngrok/webhook setup
 │   ├── routes/             # select, review, webex webhook
-│   ├── bot/                # command handlers, notifications
+│   ├── bot/                # command handlers (20+ commands), notifications
 │   ├── templates/          # HTML templates
 │   └── tests/
 ├── idea-generator/         # Python — multi-model idea generation
@@ -295,12 +373,13 @@ nsaf/
 ├── scripts/
 │   ├── setup.sh            # First-time server setup
 │   ├── detect-tools.sh     # MCP tool detection
-│   ├── restart-apps.sh     # Watchdog — restarts dead apps
+│   ├── restart-apps.sh     # Watchdog — restarts dead apps + fixes stuck builds
 │   └── register-webhook.sh # Webex webhook registration
 ├── systemd/                # Service files (templated)
 ├── static/                 # Banner + icon images
 ├── preferences.md          # What to build — the single control surface
 ├── recovery-plan.md        # Ops runbook + disaster recovery
+├── codebase-map.html       # Interactive architecture diagram
 └── .env.example            # All configuration documented
 ```
 
