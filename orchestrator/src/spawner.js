@@ -58,12 +58,25 @@ After reading the source, use its structure to inform the /sws:start topic and /
 `;
     }
 
+    // Load animation strategy if available
+    let animationInstructions = '';
+    try {
+      const nsafDir = process.env.NSAF_DIR || process.cwd();
+      const animStrategy = readFileSync(join(nsafDir, 'config', 'animation-strategy.md'), 'utf-8');
+      animationInstructions = `
+ANIMATION REQUIREMENTS:
+When the /sws:guide stage generates interactive HTML study guides, follow these animation guidelines:
+${animStrategy}
+`;
+    } catch { /* no animation config */ }
+
     prompt = `Generate a complete learning package. NO human interaction — make all decisions autonomously.
 ${sourceInstructions}
 Run /sws:start with topic "${topic}", level "${level}", chapters ${chapters}.
 
 The pipeline auto-chains: start → scope → research → write → diagrams → guide → slides → podcast.
-Each stage spawns sub-agents for parallel work. Let them complete. Do NOT stop between stages.`;
+Each stage spawns sub-agents for parallel work. Let them complete. Do NOT stop between stages.
+${animationInstructions}`;
 
   } else {
     // Standard app build
