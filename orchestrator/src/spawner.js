@@ -82,13 +82,61 @@ ${animStrategy}
       log.warn({ slug, error: err.message }, 'Could not write animation strategy');
     }
 
-    prompt = `Generate a complete learning package. NO human interaction — make all decisions autonomously.
-Read CLAUDE.md in this directory for animation requirements — study guides MUST include inline SVG animations.
-${sourceInstructions}
-Run /sws:start with topic "${topic}", level "${level}", chapters ${chapters}.
+    // Detect existing output to resume from where we left off
+    let resumeFrom = null;
+    const outputBase = join(dir, 'output');
+    if (existsSync(outputBase)) {
+      const subdirs = readdirSync(outputBase, { withFileTypes: true }).filter(d => d.isDirectory());
+      if (subdirs.length > 0) {
+        const outDir = join(outputBase, subdirs[0].name);
+        const hasResearch = existsSync(join(outDir, 'research')) && readdirSync(join(outDir, 'research')).length > 0;
+        const hasChapters = existsSync(join(outDir, 'chapters')) && readdirSync(join(outDir, 'chapters')).length > 0;
+        const hasTextbook = existsSync(join(outDir, 'textbook.md'));
+        const hasGuides = existsSync(join(outDir, 'guides')) && readdirSync(join(outDir, 'guides')).length > 0;
+        const hasSlides = existsSync(join(outDir, 'slides.md'));
+        const hasPodcast = existsSync(join(outDir, 'podcast-prompt.md'));
+
+        if (hasPodcast) {
+          resumeFrom = null; // Fully complete
+        } else if (hasSlides) {
+          resumeFrom = 'podcast';
+        } else if (hasGuides) {
+          resumeFrom = 'slides';
+        } else if (hasTextbook || hasChapters) {
+          resumeFrom = 'guide';
+        } else if (hasResearch) {
+          resumeFrom = 'write';
+        }
+
+        if (resumeFrom) {
+          log.info({ slug, resumeFrom, outDir }, 'Detected partial output — will resume');
+        }
+      }
+    }
+
+    let pipelineInstructions;
+    if (resumeFrom) {
+      const stageMap = {
+        'write': '/sws:write — then let it auto-chain through diagrams → guide → slides → podcast',
+        'guide': '/sws:guide — then let it auto-chain through slides → podcast',
+        'slides': '/sws:slides — then let it auto-chain to podcast',
+        'podcast': '/sws:podcast',
+      };
+      pipelineInstructions = `RESUME: This project was partially built. Chapters and earlier stages already exist.
+Do NOT re-run /sws:start or /sws:scope or /sws:research. They are done.
+Start from: ${stageMap[resumeFrom]}
+Each stage spawns sub-agents for parallel work. Let them complete. Do NOT stop between stages.`;
+    } else {
+      pipelineInstructions = `Run /sws:start with topic "${topic}", level "${level}", chapters ${chapters}.
 
 The pipeline auto-chains: start → scope → research → write → diagrams → guide → slides → podcast.
 Each stage spawns sub-agents for parallel work. Let them complete. Do NOT stop between stages.`;
+    }
+
+    prompt = `Generate a complete learning package. NO human interaction — make all decisions autonomously.
+Read CLAUDE.md in this directory for animation requirements — study guides MUST include inline SVG animations.
+${sourceInstructions}
+${pipelineInstructions}`;
 
   } else {
     // Standard app build
