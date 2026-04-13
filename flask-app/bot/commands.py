@@ -790,6 +790,14 @@ def cmd_sws(arg):
         level = lv_match.group(1)
         arg = arg[:lv_match.start()] + arg[lv_match.end():]
 
+    # Handle shorthand --beginner, --intermediate, --advanced
+    for lv in ["beginner", "intermediate", "advanced"]:
+        lv_short = re.search(rf'--{lv}\b', arg, re.IGNORECASE)
+        if lv_short:
+            level = lv
+            arg = arg[:lv_short.start()] + arg[lv_short.end():]
+            break
+
     # Extract --notes "..."
     nt_match = re.search(r'--notes\s+"([^"]+)"', arg)
     if not nt_match:
