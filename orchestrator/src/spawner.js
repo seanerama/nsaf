@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { createWriteStream, readFileSync, existsSync, readdirSync } from 'fs';
+import { createWriteStream, readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import pino from 'pino';
 import { projectUpdate, projectGet } from './db.js';
