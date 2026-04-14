@@ -2,6 +2,7 @@
 
 import logging
 import os
+import requests as req
 
 from flask import Blueprint, request, jsonify
 
@@ -74,6 +75,23 @@ def webhook():
     if not text:
         return jsonify({"status": "empty"}), 200
 
+    # Download file attachments (if any)
+    attachments = []
+    if hasattr(message, 'files') and message.files:
+        token = os.environ.get("WEBEX_BOT_TOKEN", "")
+        for file_url in message.files:
+            try:
+                resp = req.get(file_url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+                resp.raise_for_status()
+                disp = resp.headers.get("Content-Disposition", "")
+                filename = "attachment"
+                if "filename=" in disp:
+                    filename = disp.split("filename=")[-1].strip('" ')
+                attachments.append({"filename": filename, "content": resp.content, "content_type": resp.headers.get("Content-Type", "")})
+                log.info(f"Downloaded attachment: {filename} ({len(resp.content)} bytes)")
+            except Exception as e:
+                log.error(f"Failed to download attachment {file_url}: {e}")
+
     # Strip bot mention prefix in group spaces
     # Webex prepends the bot display name when @mentioned: "BotName command args"
     try:
@@ -92,7 +110,7 @@ def webhook():
         return jsonify({"status": "empty"}), 200
 
     # Handle command — returns string or dict with {text, files}
-    response = handle_command(text)
+    response = handle_command(text, attachments=attachments)
 
     # Reply
     try:

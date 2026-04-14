@@ -16,7 +16,7 @@ from shared.db import (
 )
 
 
-def handle_command(text):
+def handle_command(text, attachments=None):
     """Route command text to handler, return response string."""
     parts = text.strip().split(None, 1)
     cmd = parts[0].lower() if parts else ""
@@ -55,6 +55,9 @@ def handle_command(text):
     if not handler:
         return f"Unknown command: `{cmd}`. Type `help` for available commands."
 
+    # Pass attachments to commands that support them
+    if cmd == "sws" and attachments:
+        return handler(arg, attachments=attachments)
     return handler(arg)
 
 
@@ -760,7 +763,7 @@ def cmd_archive(slug):
     return f"Project `{slug}` archived. Processes stopped, ports released. Files preserved at `{project.get('project_dir', '?')}`."
 
 
-def cmd_sws(arg):
+def cmd_sws(arg, attachments=None):
     """Generate a StudyWS learning package for a topic."""
     if not arg:
         return "Usage: `sws <topic> [options]`\nExample: `sws Kubernetes Networking`\nExample: `sws Machine Learning --chapters 12 --level beginner`"
@@ -833,6 +836,34 @@ def cmd_sws(arg):
 
     # Create project directory and config
     os.makedirs(project_dir, exist_ok=True)
+
+    # Save file attachments as source material
+    has_source_file = False
+    if attachments:
+        for att in attachments:
+            content = att["content"]
+            ct = att.get("content_type", "")
+            # Decode text-based attachments to string
+            if isinstance(content, bytes):
+                if ct.startswith("text/") or ct in ("application/json", "application/xml"):
+                    content = content.decode("utf-8", errors="replace")
+                elif ct == "application/pdf":
+                    # Save PDF as-is for Claude to read
+                    pdf_path = os.path.join(project_dir, "source-material.pdf")
+                    with open(pdf_path, "wb") as f:
+                        f.write(content)
+                    has_source_file = True
+                    continue
+                else:
+                    # Try to decode as text
+                    try:
+                        content = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+            with open(os.path.join(project_dir, "source-material.md"), "w") as f:
+                f.write(content)
+            has_source_file = True
+
     import json as _json
     config = {
         "topic": topic,
@@ -840,6 +871,7 @@ def cmd_sws(arg):
         "level": level,
         "notes": notes,
         "source_url": source_url,
+        "has_source_file": has_source_file,
     }
     with open(os.path.join(project_dir, "studyws-config.json"), "w") as f:
         _json.dump(config, f, indent=2)
@@ -865,7 +897,9 @@ def cmd_sws(arg):
         f"**Chapters:** {chapters}",
         f"**Level:** {level}",
     ]
-    if source_url:
+    if has_source_file:
+        lines.append(f"**Source:** attached file saved as source material")
+    elif source_url:
         lines.append(f"**Source:** {source_url}")
     if notes:
         lines.append(f"**Notes:** {notes}")

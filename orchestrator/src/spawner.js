@@ -45,9 +45,36 @@ export function spawnSession(project, claudeCommandTemplate) {
     const level = config.level || 'intermediate';
     const notes = config.notes || '';
     const sourceUrl = config.source_url || '';
+    const hasSourceFile = config.has_source_file || false;
 
     let sourceInstructions = '';
-    if (sourceUrl) {
+    // Check for local source material file (from Webex attachment)
+    const sourceMdPath = join(dir, 'source-material.md');
+    const sourcePdfPath = join(dir, 'source-material.pdf');
+    if (existsSync(sourceMdPath)) {
+      const sourceContent = readFileSync(sourceMdPath, 'utf-8');
+      sourceInstructions = `
+IMPORTANT — Source Material:
+The following document was provided as the primary source for this study material.
+Use it as the primary source for structuring the chapters and content.
+The topic name and chapter outline should be derived from this document's content.
+Use its structure to inform the /sws:start topic and /sws:scope outline.
+
+--- BEGIN SOURCE MATERIAL ---
+${sourceContent}
+--- END SOURCE MATERIAL ---
+`;
+      log.info({ slug, bytes: sourceContent.length }, 'Injected source-material.md into prompt');
+    } else if (existsSync(sourcePdfPath)) {
+      sourceInstructions = `
+IMPORTANT — Source Material:
+A PDF source document has been saved at: ${sourcePdfPath}
+Read this PDF file and use it as the primary source for structuring the chapters and content.
+The topic name and chapter outline should be derived from this document's content.
+Use its structure to inform the /sws:start topic and /sws:scope outline.
+`;
+      log.info({ slug }, 'Referenced source-material.pdf in prompt');
+    } else if (sourceUrl) {
       sourceInstructions = `
 IMPORTANT — Source Material:
 Before running the pipeline, fetch and read this document: ${sourceUrl}
