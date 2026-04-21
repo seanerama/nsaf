@@ -932,47 +932,40 @@ def _slug_from_idea(idea):
     return "-".join(meaningful[:4])[:40].rstrip("-") or "untitled"
 
 
+def _extract_flag(arg, name):
+    """Pull `--<name> <value>` out of arg. Accepts quoted or multi-word unquoted
+    values (reads until next --flag or end-of-string). Returns (value, remaining_arg)."""
+    import re
+    # Quoted form first: --flag "value with spaces"
+    m = re.search(rf'--{name}\s+"([^"]+)"', arg)
+    if not m:
+        # Unquoted form: --flag value words until next --flag or end
+        m = re.search(rf'--{name}\s+(.+?)(?=\s+--\w|\s*$)', arg)
+    if not m:
+        return "", arg
+    return m.group(1).strip(), (arg[:m.start()] + arg[m.end():]).strip()
+
+
 def cmd_story(arg):
     """Generate an illustrated audio story from an idea."""
     if not arg:
-        return ("Usage: `story <idea>`\n"
+        return ("Usage: `story <idea>` or `story --title <title> --idea \"<idea>\"`\n"
                 "Example: `story A bear cub afraid of the dark learns to love the night sky`\n"
-                "Options: `--title <short-slug>`, `--scenes 8`, `--style \"watercolor storybook\"`, `--notes \"bedtime tone\"`")
+                "Example: `story --title Kind Boy --idea \"A girl shows kindness to an angry boy\"`\n"
+                "Options: `--scenes 8`, `--style \"watercolor storybook\"`, `--notes \"bedtime tone\"`")
 
     import re
     import time
-    scenes = ""
-    style = ""
-    notes = ""
-    title = ""
 
-    ti_match = re.search(r'--title\s+"([^"]+)"', arg)
-    if not ti_match:
-        ti_match = re.search(r'--title\s+(\S+)', arg)
-    if ti_match:
-        title = ti_match.group(1)
-        arg = arg[:ti_match.start()] + arg[ti_match.end():]
+    title, arg = _extract_flag(arg, "title")
+    idea_flag, arg = _extract_flag(arg, "idea")
+    style, arg = _extract_flag(arg, "style")
+    notes, arg = _extract_flag(arg, "notes")
+    scenes, arg = _extract_flag(arg, "scenes")
+    scenes = scenes if scenes.isdigit() else ""
 
-    sc_match = re.search(r'--scenes\s+(\d+)', arg)
-    if sc_match:
-        scenes = sc_match.group(1)
-        arg = arg[:sc_match.start()] + arg[sc_match.end():]
-
-    st_match = re.search(r'--style\s+"([^"]+)"', arg)
-    if not st_match:
-        st_match = re.search(r'--style\s+(\S+)', arg)
-    if st_match:
-        style = st_match.group(1)
-        arg = arg[:st_match.start()] + arg[st_match.end():]
-
-    nt_match = re.search(r'--notes\s+"([^"]+)"', arg)
-    if not nt_match:
-        nt_match = re.search(r'--notes\s+(\S+)', arg)
-    if nt_match:
-        notes = nt_match.group(1)
-        arg = arg[:nt_match.start()] + arg[nt_match.end():]
-
-    idea = arg.strip()
+    # --idea wins; fall back to whatever positional text is left
+    idea = idea_flag.strip() if idea_flag else arg.strip()
     if not idea:
         return "Please provide a story idea. Example: `story A clever fox outsmarts a bridge troll`"
 
