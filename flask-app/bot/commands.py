@@ -911,17 +911,47 @@ def cmd_sws(arg, attachments=None):
     return "\n".join(lines)
 
 
+_STORY_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at",
+    "by", "for", "with", "from", "as", "is", "are", "was", "were",
+    "be", "been", "being", "that", "this", "these", "those", "it", "its",
+    "his", "her", "their", "our", "my", "your", "he", "she", "they", "we",
+    "who", "whom", "which", "what", "when", "where", "why", "how",
+    "about", "all", "any", "some", "no", "not", "so", "too", "very",
+    "up", "out", "off", "over", "than", "then", "just", "also",
+}
+
+
+def _slug_from_idea(idea):
+    """Extract a short memorable slug from the first few non-stopwords of the idea."""
+    import re
+    words = re.findall(r"[a-z0-9]+", idea.lower())
+    meaningful = [w for w in words if w not in _STORY_STOPWORDS and len(w) > 2]
+    if not meaningful:
+        meaningful = words
+    return "-".join(meaningful[:4])[:40].rstrip("-") or "untitled"
+
+
 def cmd_story(arg):
     """Generate an illustrated audio story from an idea."""
     if not arg:
         return ("Usage: `story <idea>`\n"
                 "Example: `story A bear cub afraid of the dark learns to love the night sky`\n"
-                "Options: `--scenes 8`, `--style \"watercolor storybook\"`, `--notes \"bedtime tone\"`")
+                "Options: `--title <short-slug>`, `--scenes 8`, `--style \"watercolor storybook\"`, `--notes \"bedtime tone\"`")
 
     import re
+    import time
     scenes = ""
     style = ""
     notes = ""
+    title = ""
+
+    ti_match = re.search(r'--title\s+"([^"]+)"', arg)
+    if not ti_match:
+        ti_match = re.search(r'--title\s+(\S+)', arg)
+    if ti_match:
+        title = ti_match.group(1)
+        arg = arg[:ti_match.start()] + arg[ti_match.end():]
 
     sc_match = re.search(r'--scenes\s+(\d+)', arg)
     if sc_match:
@@ -946,16 +976,19 @@ def cmd_story(arg):
     if not idea:
         return "Please provide a story idea. Example: `story A clever fox outsmarts a bridge troll`"
 
-    # Slug from first few words of the idea
-    slug_base = re.sub(r'[^a-z0-9]+', '-', idea.lower()).strip('-')[:60]
+    # Slug: explicit --title wins; otherwise extract meaningful words from idea
+    if title:
+        slug_base = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:40]
+    else:
+        slug_base = _slug_from_idea(idea)
     slug = f"story-{slug_base}"
+
+    # If slug already exists (e.g. collision), append a short timestamp suffix
+    if project_get(slug):
+        slug = f"{slug}-{int(time.time()) % 10000}"
 
     projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
     project_dir = os.path.join(projects_dir, slug)
-
-    existing = project_get(slug)
-    if existing:
-        return f"Story project `{slug}` already exists ({existing['status']}). Use `rebuild {slug}` to regenerate."
 
     os.makedirs(project_dir, exist_ok=True)
 
@@ -979,7 +1012,7 @@ def cmd_story(arg):
         db.commit()
         pid = cursor.lastrowid
     except sqlite3.IntegrityError:
-        return f"Project `{slug}` already exists."
+        return f"Project `{slug}` already exists — pass a different `--title` to avoid the collision."
 
     queue_enqueue(pid)
 
@@ -1728,6 +1761,7 @@ def cmd_help(_arg):
 - `sws <url>` — Generate from a PDF/document (e.g. exam blueprint)
 - `sws <topic> --chapters 12 --level beginner` — With options
 - `story <idea>` — Generate an illustrated audio story (MP4)
+- `story <idea> --title kind-boy` — Set a short slug for the project
 - `story <idea> --scenes 8 --style "watercolor" --notes "..."` — With options
 - `fetchstory <slug>` — Fetch the final MP4 for a completed story
 
