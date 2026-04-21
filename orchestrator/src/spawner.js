@@ -250,12 +250,15 @@ Now run: /sdd:start --from architect`;
   const logStream = createWriteStream(logPath, { flags: 'a' });
 
   // Strip API keys so Claude Code uses the subscription, not the API.
-  // Exception: story projects need OPENAI_API_KEY at runtime for TTS narration.
+  // Exception: story projects need OPENAI_API_KEY (TTS narration) and
+  // GEMINI_API_KEY/NANOBANANA_API_KEY (Nano Banana image generation).
   const cleanEnv = { ...process.env };
   delete cleanEnv.ANTHROPIC_API_KEY;
-  delete cleanEnv.GOOGLE_API_KEY;
   if (projectType !== 'story') {
     delete cleanEnv.OPENAI_API_KEY;
+    delete cleanEnv.GOOGLE_API_KEY;
+    delete cleanEnv.GEMINI_API_KEY;
+    delete cleanEnv.NANOBANANA_API_KEY;
   }
 
   const child = spawn(bin, args, {
