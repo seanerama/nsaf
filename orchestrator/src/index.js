@@ -66,14 +66,14 @@ async function processQueue() {
     log.info({ slug, projectType, queueDepth: getQueueDepth(), active: getActiveCount() }, 'Dequeued project');
 
     try {
-      if (projectType === 'studyws') {
-        // StudyWS: no ports, no database, no scaffold — just create dir and spawn
+      if (projectType === 'studyws' || projectType === 'story') {
+        // Content-generation pipelines: no ports, no database, no scaffold
         const { mkdirSync } = await import('fs');
         mkdirSync(item.project_dir, { recursive: true });
 
         const project = { ...item, project_dir: item.project_dir, project_type: projectType };
         spawnSession(project, config.claudeCommand);
-        log.info({ slug }, 'StudyWS session spawned');
+        log.info({ slug, projectType }, 'Content-pipeline session spawned');
 
       } else {
         // Standard app build
@@ -105,11 +105,11 @@ async function processQueue() {
 
     } catch (err) {
       log.error({ slug, error: err.message }, 'Failed to launch project');
-      if (projectType !== 'studyws') {
+      if (projectType === 'studyws' || projectType === 'story') {
+        projectUpdate(slug, { status: 'queued' });
+      } else {
         releasePorts(item.id);
         projectUpdate(slug, { status: 'queued', port_start: null, port_end: null });
-      } else {
-        projectUpdate(slug, { status: 'queued' });
       }
       queueEnqueue(item.id);
     }

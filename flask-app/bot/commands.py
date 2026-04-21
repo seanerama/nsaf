@@ -42,6 +42,8 @@ def handle_command(text, attachments=None):
         "archive": cmd_archive,
         "gitpush": cmd_gitpush,
         "sws": cmd_sws,
+        "story": cmd_story,
+        "fetchstory": cmd_fetchstory,
         "stopall": cmd_stopall,
         "stop": cmd_stop,
         "start": cmd_start,
@@ -909,6 +911,125 @@ def cmd_sws(arg, attachments=None):
     return "\n".join(lines)
 
 
+def cmd_story(arg):
+    """Generate an illustrated audio story from an idea."""
+    if not arg:
+        return ("Usage: `story <idea>`\n"
+                "Example: `story A bear cub afraid of the dark learns to love the night sky`\n"
+                "Options: `--scenes 8`, `--style \"watercolor storybook\"`, `--notes \"bedtime tone\"`")
+
+    import re
+    scenes = ""
+    style = ""
+    notes = ""
+
+    sc_match = re.search(r'--scenes\s+(\d+)', arg)
+    if sc_match:
+        scenes = sc_match.group(1)
+        arg = arg[:sc_match.start()] + arg[sc_match.end():]
+
+    st_match = re.search(r'--style\s+"([^"]+)"', arg)
+    if not st_match:
+        st_match = re.search(r'--style\s+(\S+)', arg)
+    if st_match:
+        style = st_match.group(1)
+        arg = arg[:st_match.start()] + arg[st_match.end():]
+
+    nt_match = re.search(r'--notes\s+"([^"]+)"', arg)
+    if not nt_match:
+        nt_match = re.search(r'--notes\s+(\S+)', arg)
+    if nt_match:
+        notes = nt_match.group(1)
+        arg = arg[:nt_match.start()] + arg[nt_match.end():]
+
+    idea = arg.strip()
+    if not idea:
+        return "Please provide a story idea. Example: `story A clever fox outsmarts a bridge troll`"
+
+    # Slug from first few words of the idea
+    slug_base = re.sub(r'[^a-z0-9]+', '-', idea.lower()).strip('-')[:60]
+    slug = f"story-{slug_base}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, slug)
+
+    existing = project_get(slug)
+    if existing:
+        return f"Story project `{slug}` already exists ({existing['status']}). Use `rebuild {slug}` to regenerate."
+
+    os.makedirs(project_dir, exist_ok=True)
+
+    import json as _json
+    config = {
+        "idea": idea,
+        "scenes": scenes,
+        "style": style,
+        "notes": notes,
+    }
+    with open(os.path.join(project_dir, "story-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    import sqlite3
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'story', 'queued')",
+            (slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return f"Project `{slug}` already exists."
+
+    queue_enqueue(pid)
+
+    lines = [
+        f"**Story project queued: `{slug}`**\n",
+        f"**Idea:** {idea}",
+    ]
+    if scenes:
+        lines.append(f"**Scenes:** {scenes}")
+    if style:
+        lines.append(f"**Style:** {style}")
+    if notes:
+        lines.append(f"**Notes:** {notes}")
+    lines.append("\nPipeline: concept → outline → script → illustrations → narration → MP4.")
+    lines.append("When complete, fetch the video with `fetchstory " + slug + "`.")
+    lines.append("Building will start when a slot opens.")
+
+    return "\n".join(lines)
+
+
+def cmd_fetchstory(arg):
+    """Return the final.mp4 for a completed story project as a Webex attachment."""
+    slug = arg.strip()
+    if not slug:
+        return "Usage: `fetchstory <slug>`"
+
+    project = project_get(slug)
+    if not project:
+        return f"No project found with slug `{slug}`."
+
+    if (project.get("project_type") or "app") != "story":
+        return f"`{slug}` is not a story project."
+
+    final_mp4 = os.path.join(project["project_dir"], "story-output", "final.mp4")
+    if not os.path.exists(final_mp4):
+        return f"No final.mp4 yet for `{slug}` (status: {project['status']})."
+
+    # Webex attachment limit is ~100MB
+    size = os.path.getsize(final_mp4)
+    mb = size / (1024 * 1024)
+    if size > 95 * 1024 * 1024:
+        return (f"**{slug}**: final.mp4 is {mb:.1f} MB — too large for Webex attachment.\n"
+                f"Fetch it from the server: `{final_mp4}`")
+
+    return {
+        "text": f"**{slug}** — final.mp4 ({mb:.1f} MB)",
+        "files": [final_mp4],
+    }
+
+
 def cmd_stopall(_arg):
     """Stop all locally running deployed apps."""
     db = get_db()
@@ -1606,6 +1727,9 @@ def cmd_help(_arg):
 - `sws <topic>` — Generate a textbook + study guides for a topic
 - `sws <url>` — Generate from a PDF/document (e.g. exam blueprint)
 - `sws <topic> --chapters 12 --level beginner` — With options
+- `story <idea>` — Generate an illustrated audio story (MP4)
+- `story <idea> --scenes 8 --style "watercolor" --notes "..."` — With options
+- `fetchstory <slug>` — Fetch the final MP4 for a completed story
 
 **App Control**
 - `stop <slug>` — Stop a running local app

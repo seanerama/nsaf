@@ -30,6 +30,7 @@ Flask App (Python :5000) ←→ SQLite (nsaf.db) ←→ Orchestrator (Node.js)
 |------|----------|-------------|-------------------|
 | `app` | SDD (architect → plan → build → test → deploy) | `/sdd:start --from architect` | STATE.md deployer role complete |
 | `studyws` | StudyWS (scope → research → write → diagrams → guide → slides → podcast) | `/sws:start` | `textbook.md` exists in output dir |
+| `story` | Story Maker (outline → write → illustrate → narrate → build) | `/story:start` | `story-output/final.mp4` exists |
 
 ## File Map
 
@@ -92,6 +93,7 @@ Flask App (Python :5000) ←→ SQLite (nsaf.db) ←→ Orchestrator (Node.js)
 **Build:** status, pause, pause all, resume, skip, restart, rebuild, modify
 **Ideas:** ideas, idea, queue, generate
 **StudyWS:** sws
+**Story:** story, fetchstory
 **Lifecycle:** promote, demote, archive, delete, gitpush, export
 **App Control:** stop, start, stopall
 **Troubleshooting:** debug

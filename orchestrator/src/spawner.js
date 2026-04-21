@@ -165,6 +165,52 @@ Read CLAUDE.md in this directory for animation requirements — study guides MUS
 ${sourceInstructions}
 ${pipelineInstructions}`;
 
+  } else if (projectType === 'story') {
+    // Illustrated audio story pipeline
+    let storyConfig = {};
+    try {
+      storyConfig = JSON.parse(readFileSync(join(dir, 'story-config.json'), 'utf-8'));
+    } catch { /* no config */ }
+
+    const idea = storyConfig.idea || project.slug;
+    const style = storyConfig.style || '';
+    const scenes = storyConfig.scenes || '';
+    const notes = storyConfig.notes || '';
+
+    // Detect partial output to resume
+    const storyOut = join(dir, 'story-output');
+    const hasFinal = existsSync(join(storyOut, 'final.mp4'));
+    const hasConcept = existsSync(join(storyOut, 'concept.md'));
+    const hasOutline = existsSync(join(storyOut, 'outline.md'));
+    const hasScript = existsSync(join(storyOut, 'script.md'));
+    const hasImages = existsSync(join(storyOut, 'images')) &&
+      readdirSync(join(storyOut, 'images')).some(f => f.endsWith('.png'));
+    const hasAudio = existsSync(join(storyOut, 'audio')) &&
+      readdirSync(join(storyOut, 'audio')).some(f => f.endsWith('.mp3'));
+
+    let pipelineInstructions;
+    if (hasFinal) {
+      pipelineInstructions = `This story is already complete — final.mp4 exists. Exit immediately.`;
+    } else if (hasConcept || hasOutline || hasScript || hasImages || hasAudio) {
+      log.info({ slug, hasConcept, hasOutline, hasScript, hasImages, hasAudio }, 'Detected partial story — will resume');
+      pipelineInstructions = `RESUME: This story was partially built. Run /story:next to pick up where it left off.
+Do NOT re-run earlier stages that are already complete. Complete the pipeline end-to-end to produce story-output/final.mp4.
+Do NOT stop between stages — each stage must invoke the next automatically.`;
+    } else {
+      const styleHint = style ? `\nPreferred art style: ${style}` : '';
+      const scenesHint = scenes ? `\nTarget scene count: ${scenes}` : '';
+      const notesHint = notes ? `\nAdditional notes: ${notes}` : '';
+      pipelineInstructions = `Run /story:start ${JSON.stringify(idea)}${styleHint}${scenesHint}${notesHint}
+
+The pipeline auto-chains: start → outline → write → illustrate → narrate → build.
+Each stage completes and invokes the next. Do NOT stop between stages.
+Produce a final MP4 at story-output/final.mp4.`;
+    }
+
+    prompt = `Generate an illustrated audio story autonomously with NO human interaction.
+Do NOT ask any questions — make all creative decisions yourself.
+${pipelineInstructions}`;
+
   } else {
     // Standard app build
     let visionContext = '';
@@ -203,11 +249,14 @@ Now run: /sdd:start --from architect`;
   const logPath = join(dir, 'build.log');
   const logStream = createWriteStream(logPath, { flags: 'a' });
 
-  // Strip API keys so Claude Code uses the subscription, not the API
+  // Strip API keys so Claude Code uses the subscription, not the API.
+  // Exception: story projects need OPENAI_API_KEY at runtime for TTS narration.
   const cleanEnv = { ...process.env };
   delete cleanEnv.ANTHROPIC_API_KEY;
-  delete cleanEnv.OPENAI_API_KEY;
   delete cleanEnv.GOOGLE_API_KEY;
+  if (projectType !== 'story') {
+    delete cleanEnv.OPENAI_API_KEY;
+  }
 
   const child = spawn(bin, args, {
     cwd: dir,
@@ -282,6 +331,25 @@ Now run: /sdd:start --from architect`;
         log.info({ slug, outputPath }, 'StudyWS content generation complete');
       } else {
         log.warn({ slug, code }, 'StudyWS session exited with error');
+      }
+
+    } else if (currentType === 'story') {
+      // Story completion: final.mp4 in story-output/
+      const finalMp4 = join(dir, 'story-output', 'final.mp4');
+      const completed = existsSync(finalMp4);
+
+      if (completed) {
+        projectUpdate(slug, {
+          status: 'deployed-local',
+          deployed_url: finalMp4,
+          completed_at: new Date().toISOString(),
+          last_state_change: new Date().toISOString(),
+          sdd_phase: 'complete',
+          sdd_progress: 100,
+        });
+        log.info({ slug, finalMp4 }, 'Story pipeline complete');
+      } else {
+        log.warn({ slug, code }, 'Story session exited without producing final.mp4');
       }
 
     } else {

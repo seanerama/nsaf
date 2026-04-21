@@ -57,6 +57,33 @@ export function checkStalls(timeoutMinutes) {
       continue;
     }
 
+    // For Story projects: same pattern — process-check + final.mp4 existence
+    if (projectType === 'story') {
+      const lastChange = project.started_at
+        ? new Date(project.started_at).getTime()
+        : now;
+      const elapsed = (now - lastChange) / 1000 / 60;
+
+      if (elapsed >= timeoutMinutes && !isClaudeRunningForProject(project.project_dir)) {
+        const finalMp4 = join(project.project_dir, 'story-output', 'final.mp4');
+        if (existsSync(finalMp4)) {
+          projectUpdate(project.slug, {
+            status: 'deployed-local',
+            deployed_url: finalMp4,
+            sdd_phase: 'complete',
+            sdd_progress: 100,
+            completed_at: new Date().toISOString(),
+          });
+          log.info({ slug: project.slug, finalMp4 }, 'Story project completed (detected by stall checker)');
+        } else {
+          projectUpdate(project.slug, { stall_alerted: 1 });
+          stalled.push(project);
+          log.warn({ slug: project.slug, elapsedMinutes: Math.round(elapsed) }, 'Story project stalled');
+        }
+      }
+      continue;
+    }
+
     // Standard app stall detection
     const lastChange = project.last_state_change
       ? new Date(project.last_state_change).getTime()
