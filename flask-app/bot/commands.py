@@ -44,6 +44,7 @@ def handle_command(text, attachments=None):
         "sws": cmd_sws,
         "story": cmd_story,
         "fetchstory": cmd_fetchstory,
+        "storyfix": cmd_storyfix,
         "stopall": cmd_stopall,
         "stop": cmd_stop,
         "start": cmd_start,
@@ -1056,6 +1057,81 @@ def cmd_fetchstory(arg):
     }
 
 
+def cmd_storyfix(arg):
+    """Regenerate a specific scene of a story with a targeted correction."""
+    if not arg:
+        return ("Usage: `storyfix <slug> <scene-number> <instruction>`\n"
+                "Example: `storyfix story-the-invisible-backpack 3 show milo inside the kitchen window, not outside the house`")
+
+    parts = arg.split(None, 2)
+    if len(parts) < 3:
+        return ("Usage: `storyfix <slug> <scene-number> <instruction>`\n"
+                "Need all three: slug, scene number, and what to fix.")
+
+    slug, scene_str, instruction = parts[0], parts[1], parts[2].strip()
+
+    if not scene_str.isdigit():
+        return f"Scene number must be an integer, got `{scene_str}`."
+    scene_n = int(scene_str)
+
+    project = project_get(slug)
+    if not project:
+        return f"No project found with slug `{slug}`."
+    if (project.get("project_type") or "app") != "story":
+        return f"`{slug}` is not a story project."
+
+    project_dir = project["project_dir"]
+    story_out = os.path.join(project_dir, "story-output")
+    script_path = os.path.join(story_out, "script.md")
+    scene_png = os.path.join(story_out, "images", f"scene-{scene_n}.png")
+
+    if not os.path.exists(script_path):
+        return f"`{slug}` has no script.md — can't fix without original prompts."
+    if not os.path.exists(scene_png):
+        return f"`{slug}` has no images/scene-{scene_n}.png — check scene number."
+
+    # Write the fix-request file — spawner will read this on the next build
+    fix_path = os.path.join(story_out, "fix-request.md")
+    with open(fix_path, "w") as f:
+        f.write(f"# Fix Request\n\n"
+                f"**Scene:** {scene_n}\n\n"
+                f"**Correction:**\n\n{instruction}\n")
+
+    # Remove the bad image and the old final.mp4 so the rebuild picks fresh
+    try:
+        os.remove(scene_png)
+    except OSError:
+        pass
+    final_mp4 = os.path.join(story_out, "final.mp4")
+    try:
+        os.remove(final_mp4)
+    except OSError:
+        pass
+
+    # Re-queue the project so the orchestrator spawns a fix-mode Claude session
+    import sqlite3
+    db = get_db()
+    db.execute(
+        "UPDATE projects SET status='queued', deployed_url=NULL, completed_at=NULL, "
+        "stall_alerted=0, last_state_change=datetime('now') WHERE slug=?",
+        (slug,),
+    )
+    # Idempotent re-enqueue (don't duplicate if already in queue)
+    cur = db.execute("SELECT id FROM queue WHERE project_id=?", (project["id"],))
+    if not cur.fetchone():
+        db.execute(
+            "INSERT INTO queue (project_id, position) VALUES (?, "
+            "COALESCE((SELECT MAX(position) FROM queue), 0) + 1)",
+            (project["id"],),
+        )
+    db.commit()
+
+    return (f"**Fix queued for `{slug}` scene {scene_n}**\n\n"
+            f"**Instruction:** {instruction}\n\n"
+            f"The orchestrator will regenerate just scene {scene_n} with nano-banana, "
+            f"rebuild final.mp4, and notify when done. `fetchstory {slug}` to get the updated MP4.")
+
+
 def cmd_stopall(_arg):
     """Stop all locally running deployed apps."""
     db = get_db()
@@ -1757,6 +1833,7 @@ def cmd_help(_arg):
 - `story <idea> --title kind-boy` — Set a short slug for the project
 - `story <idea> --scenes 8 --style "watercolor" --notes "..."` — With options
 - `fetchstory <slug>` — Fetch the final MP4 for a completed story
+- `storyfix <slug> <scene-n> <what to fix>` — Regenerate one scene with a targeted correction and rebuild
 
 **App Control**
 - `stop <slug>` — Stop a running local app

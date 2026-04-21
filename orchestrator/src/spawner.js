@@ -188,8 +188,37 @@ ${pipelineInstructions}`;
     const hasAudio = existsSync(join(storyOut, 'audio')) &&
       readdirSync(join(storyOut, 'audio')).some(f => f.endsWith('.mp3'));
 
+    // Detect a fix request (from storyfix Webex command)
+    const fixRequestPath = join(storyOut, 'fix-request.md');
+    const hasFixRequest = existsSync(fixRequestPath);
+
     let pipelineInstructions;
-    if (hasFinal) {
+    if (hasFixRequest) {
+      const fixContent = readFileSync(fixRequestPath, 'utf-8');
+      log.info({ slug }, 'Detected fix-request — entering fix mode');
+      pipelineInstructions = `FIX MODE — targeted scene regeneration.
+Read story-output/fix-request.md for the scene number and correction instruction.
+Do NOT re-run /story:start, /story:outline, /story:write, or /story:narrate.
+
+Process:
+1. Read the fix-request file. It names a scene number and a correction instruction.
+2. Read the original \`### Illustration Prompt\` for that scene from story-output/script.md.
+3. Build a refined prompt = original prompt + a clear appended "IMPORTANT CORRECTION: ..." sentence from the instruction.
+4. From the project directory, call:
+   \`\`\`bash
+   rm -rf nanobanana-output
+   gemini --yolo -p "/generate '<refined prompt>' --aspect=16:9"
+   mv nanobanana-output/*.png story-output/images/scene-<N>.png
+   rm -rf nanobanana-output
+   \`\`\`
+5. Run /story:build to rebuild story-output/final.mp4 with the corrected image.
+6. Delete story-output/fix-request.md on success.
+
+Fix-request contents for reference:
+---
+${fixContent}
+---`;
+    } else if (hasFinal) {
       pipelineInstructions = `This story is already complete — final.mp4 exists. Exit immediately.`;
     } else if (hasConcept || hasOutline || hasScript || hasImages || hasAudio) {
       log.info({ slug, hasConcept, hasOutline, hasScript, hasImages, hasAudio }, 'Detected partial story — will resume');
