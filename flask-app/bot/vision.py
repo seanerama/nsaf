@@ -116,6 +116,108 @@ def expand_idea(raw_text):
                      f"{getattr(response.content[0], 'text', '')[:200]}")
 
 
+REVIEW_SYSTEM_PROMPT = """You are reviewing a user's answers to questions inside a
+NSAF vision document. The document has these sections you care about:
+
+- `## Open Questions` — numbered questions the bot drafted for the user
+- `## Your Answers` — the user's responses, numbered to match the questions
+
+For each answered question, classify the answer as one of:
+- "clear" — direct, unambiguous, and answers the question
+- "ambiguous" — partial, hedged, conditional, or expresses uncertainty
+- "asked_back" — the user asked a clarifying question instead of answering, or commented that the question itself wasn't clear
+- "missing" — no answer for that question number
+
+Where answers are ambiguous, asked_back, or missing, propose **follow-up questions** that
+would unblock a clear answer. Phrase follow-ups so they could be answered in 1-2 sentences.
+
+If the original questions themselves don't fit the direction the user's answers are taking
+(e.g. user clearly wants a different scope, audience, or kind), propose a **revised set**
+of questions. Only do this when warranted — usually follow-ups are enough.
+
+Call submit_review with the structured result."""
+
+
+SUBMIT_REVIEW_TOOL = {
+    "name": "submit_review",
+    "description": "Submit the structured review of the user's answers.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {
+                "type": "string",
+                "enum": ["ready_to_build", "needs_clarification", "questions_need_revision"],
+                "description": "Overall verdict on whether the vision is ready to build.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "1-2 sentence plain-language summary of the review.",
+            },
+            "answer_reviews": {
+                "type": "array",
+                "description": "One entry per question that has an answer (or should have one).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question_number": {"type": "integer"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["clear", "ambiguous", "asked_back", "missing"],
+                        },
+                        "comment": {
+                            "type": "string",
+                            "description": "Short note explaining the classification. For ambiguous/asked_back, say what's unclear.",
+                        },
+                    },
+                    "required": ["question_number", "status", "comment"],
+                },
+            },
+            "followup_questions": {
+                "type": "array",
+                "description": "New questions to append to Open Questions. No numbering — caller adds it.",
+                "items": {"type": "string"},
+            },
+            "revised_questions": {
+                "type": "array",
+                "description": "If the original question set needs rewriting, the full replacement. Otherwise empty.",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["verdict", "summary", "answer_reviews"],
+    },
+}
+
+
+def review_answers(vision_md):
+    """Have Claude review the answers in a vision doc.
+
+    Returns dict: {verdict, summary, answer_reviews, followup_questions, revised_questions}.
+    Last two may be empty lists.
+    """
+    client = Anthropic()
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=3000,
+        temperature=0.4,
+        system=REVIEW_SYSTEM_PROMPT,
+        tools=[SUBMIT_REVIEW_TOOL],
+        tool_choice={"type": "tool", "name": "submit_review"},
+        messages=[{"role": "user", "content": vision_md}],
+    )
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use":
+            data = dict(block.input)
+            data.setdefault("followup_questions", [])
+            data.setdefault("revised_questions", [])
+            data.setdefault("answer_reviews", [])
+            for required in ("verdict", "summary"):
+                if required not in data:
+                    raise ValueError(f"Tool output missing required field: {required}")
+            return data
+    raise ValueError("Claude did not invoke submit_review; got: "
+                     f"{getattr(response.content[0], 'text', '')[:200]}")
+
+
 def _md_to_html(md):
     """Minimal markdown → HTML so emails are readable in clients that ignore text/plain."""
     lines = md.split("\n")

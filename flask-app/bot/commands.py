@@ -438,6 +438,8 @@ def cmd_vision(arg, attachments=None):
         return _vision_answer_one(rest, rest2)
     if sub == "answers":
         return _vision_answers_bulk(rest, rest2)
+    if sub in ("review", "reviewanswers"):
+        return _vision_review(rest)
     if sub == "build":
         return _vision_build(rest, kind_override=rest2 or None)
     if sub == "cancel":
@@ -454,6 +456,7 @@ def cmd_vision(arg, attachments=None):
             "  `vision questions <slug>` — show just the open questions (mobile-friendly)\n"
             "  `vision answer <slug> <N> <text>` — answer one question in chat\n"
             "  `vision answers <slug> <text>` — replace all answers in one shot\n"
+            "  `vision review <slug>` — Claude reviews your answers, suggests follow-ups\n"
             "  `vision email <slug>` — email the .md for laptop editing\n"
             "  `vision <slug>` (with .md attached) — replace the doc with your edited version\n"
             "  `vision build <slug> [kind]` — build a project from the doc\n"
@@ -574,6 +577,85 @@ def _vision_answers_bulk(slug, text):
     new_md = _replace_section(md, "Your Answers", text.strip())
     vision_update(slug, vision_md=new_md, status="received")
     return f"Updated Your Answers for `{slug}` ({len(text)} chars). Ready: `vision build {slug}`."
+
+
+def _vision_review(slug):
+    """Have Claude review the user's answers, classify them, suggest follow-ups."""
+    from bot.vision import review_answers
+    if not slug:
+        return "Usage: `vision review <slug>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    md = session.get("vision_md") or ""
+    questions_text = _extract_section(md, "Open Questions")
+    answers_text = _extract_section(md, "Your Answers")
+    if not questions_text:
+        return f"Vision `{slug}` has no `## Open Questions` to review against."
+    if not answers_text:
+        return (f"Vision `{slug}` has no answers yet. Use "
+                f"`vision answer {slug} <N> <text>` first, then review.")
+
+    try:
+        result = review_answers(md)
+    except Exception as e:
+        return f"Couldn't review: {e}"
+
+    status_icons = {
+        "clear": "✅", "ambiguous": "⚠️", "asked_back": "❓", "missing": "❌",
+    }
+    question_map = _parse_numbered_answers(questions_text)
+
+    lines = [
+        f"**Review of `{slug}` answers**",
+        "",
+        f"**Verdict:** `{result['verdict']}` — {result['summary']}",
+        "",
+        "**Per-answer:**",
+    ]
+    for review in result.get("answer_reviews", []):
+        n = review.get("question_number")
+        status = review.get("status", "")
+        icon = status_icons.get(status, "•")
+        q_full = question_map.get(n, "")
+        q_preview = q_full[:60] + ("…" if len(q_full) > 60 else "")
+        lines.append(f"{icon} **{n}.** {q_preview}")
+        comment = review.get("comment", "").strip()
+        if comment:
+            lines.append(f"   _{comment}_")
+
+    # Auto-append follow-ups so they can be answered with normal numbering.
+    followups = result.get("followup_questions") or []
+    if followups:
+        existing = _parse_numbered_answers(questions_text)
+        next_n = (max(existing) if existing else 0) + 1
+        new_q_lines = "\n".join(f"{next_n + i}. {q}" for i, q in enumerate(followups))
+        appended = questions_text.rstrip() + "\n" + new_q_lines
+        new_md = _replace_section(md, "Open Questions", appended)
+        vision_update(slug, vision_md=new_md)
+        last_n = next_n + len(followups) - 1
+        lines.append("")
+        lines.append(f"**Added {len(followups)} follow-up question(s) (Q{next_n}–Q{last_n}):**")
+        for i, q in enumerate(followups):
+            lines.append(f"{next_n + i}. {q}")
+        lines.append("")
+        lines.append(f"Answer with: `vision answer {slug} {next_n} <text>`")
+
+    revised = result.get("revised_questions") or []
+    if revised:
+        lines.append("")
+        lines.append("**Suggested question rewrite** (not applied — review and decide):")
+        for i, q in enumerate(revised, 1):
+            lines.append(f"{i}. {q}")
+        lines.append("")
+        lines.append(f"To apply, re-edit the doc via `vision email {slug}` "
+                     f"or `vision answers {slug} <text>`.")
+
+    if result.get("verdict") == "ready_to_build" and not followups:
+        lines.append("")
+        lines.append(f"All answers look clear. Run `vision build {slug}` when ready.")
+
+    return "\n".join(lines)
 
 
 def _vision_apply_attachment(session, attachments):
@@ -3065,6 +3147,7 @@ def cmd_help(_arg):
 - `vision questions <slug>` — Show just the open questions (mobile-friendly)
 - `vision answer <slug> <N> <text>` — Answer one question in Webex
 - `vision answers <slug> <text>` — Replace all answers in one shot
+- `vision review <slug>` — Claude reviews answers, suggests follow-ups
 - `vision email <slug>` — Email the .md (better for laptop editing)
 - `vision <slug>` (attach edited .md) — Replace the doc with your edited version
 - `vision build <slug> [story|studyws|app]` — Promote to a real project + queue
