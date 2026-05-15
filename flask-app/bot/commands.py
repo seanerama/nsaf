@@ -381,22 +381,41 @@ def _replace_section(md, section_name, new_body):
 
 
 def _parse_numbered_answers(text):
-    """Parse '1. foo\n2. bar baz' into {1: 'foo', 2: 'bar baz'}. Multi-line answers ok."""
+    """Parse numbered answers in either format:
+
+    Multi-line (canonical):
+        1. foo
+        2. bar baz
+    Inline (user-pasted from mobile):
+        1. foo 2. bar baz
+
+    Returns {1: 'foo', 2: 'bar baz'}. Multi-line continuations are preserved.
+
+    Safety: an `N. ` marker is only treated as a separator if N is strictly
+    greater than the previous accepted marker — that way text like
+    "step 1. then" inside an answer doesn't spuriously start a new entry.
+    """
     import re
+    if not text:
+        return {}
+    # Anchor each marker to start-of-string, after a newline, or after a space.
+    pattern = re.compile(r"(?:^|(?<=\s))(\d+)\.\s+")
+    raw = list(pattern.finditer(text))
+    if not raw:
+        return {}
+
+    # Monotonic filter — drop matches where N is not strictly increasing.
+    valid = [raw[0]]
+    for m in raw[1:]:
+        if int(m.group(1)) > int(valid[-1].group(1)):
+            valid.append(m)
+
     answers = {}
-    current = None
-    buf = []
-    for line in (text or "").splitlines():
-        m = re.match(r"^\s*(\d+)\.\s+(.*)$", line)
-        if m:
-            if current is not None:
-                answers[current] = "\n".join(buf).strip()
-            current = int(m.group(1))
-            buf = [m.group(2)]
-        elif current is not None:
-            buf.append(line)
-    if current is not None:
-        answers[current] = "\n".join(buf).strip()
+    for i, m in enumerate(valid):
+        n = int(m.group(1))
+        start = m.end()
+        end = valid[i + 1].start() if i + 1 < len(valid) else len(text)
+        answers[n] = text[start:end].strip()
     return answers
 
 
@@ -565,7 +584,11 @@ def _vision_answer_one(slug, payload):
 
 
 def _vision_answers_bulk(slug, text):
-    """Replace the entire Your Answers section with free-form text."""
+    """Replace the entire Your Answers section with free-form text.
+
+    If the text parses as numbered answers (line- or space-separated), it's
+    canonicalized to one per line. Otherwise stored verbatim.
+    """
     if not slug:
         return "Usage: `vision answers <slug> <answer text>`"
     session = vision_get(slug)
@@ -574,9 +597,18 @@ def _vision_answers_bulk(slug, text):
     if not text or not text.strip():
         return "Usage: `vision answers <slug> <answer text>` (provide the full block)"
     md = session.get("vision_md") or ""
-    new_md = _replace_section(md, "Your Answers", text.strip())
+
+    parsed = _parse_numbered_answers(text)
+    if parsed:
+        new_body = "\n".join(f"{n}. {parsed[n]}" for n in sorted(parsed))
+        note = f"parsed {len(parsed)} numbered answer(s)"
+    else:
+        new_body = text.strip()
+        note = f"{len(text)} chars (no numbered structure detected)"
+
+    new_md = _replace_section(md, "Your Answers", new_body)
     vision_update(slug, vision_md=new_md, status="received")
-    return f"Updated Your Answers for `{slug}` ({len(text)} chars). Ready: `vision build {slug}`."
+    return f"Updated Your Answers for `{slug}` — {note}. Ready: `vision build {slug}`."
 
 
 def _vision_review(slug):
