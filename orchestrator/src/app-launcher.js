@@ -5,6 +5,22 @@ import pino from 'pino';
 
 const log = pino({ name: 'nsaf.launcher' });
 
+// Generated apps run unaudited Claude-authored code (plus their npm tree).
+// They must not see NSAF/Webex/Coolify/Cloudflare/Postgres/Resend secrets.
+// Allowlist only the env entries an app actually needs to run.
+const APP_ENV_ALLOWLIST = [
+  'PATH', 'HOME', 'USER', 'LOGNAME',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TZ', 'SHELL',
+];
+
+function buildAppEnv(extra = {}) {
+  const safe = { NODE_ENV: 'development' };
+  for (const k of APP_ENV_ALLOWLIST) {
+    if (process.env[k] !== undefined) safe[k] = process.env[k];
+  }
+  return { ...safe, ...extra };
+}
+
 /**
  * Detect how to start an app and launch it on 0.0.0.0.
  * Returns the actual URL the app is running on, or null on failure.
@@ -37,7 +53,7 @@ function tryStartScript(projectDir, portStart) {
     cwd: projectDir,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
-    env: { ...process.env, PORT: String(portStart), HOST: '0.0.0.0' },
+    env: buildAppEnv({ PORT: String(portStart), HOST: '0.0.0.0' }),
   });
   child.unref();
 
@@ -66,7 +82,7 @@ function tryBackendFrontendSplit(projectDir, portStart) {
       cwd: be,
       stdio: 'ignore',
       detached: true,
-      env: { ...process.env, PORT: String(backendPort), HOST: '0.0.0.0' },
+      env: buildAppEnv({ PORT: String(backendPort), HOST: '0.0.0.0' }),
     });
     beChild.unref();
     log.info({ dir: be, port: backendPort }, 'Backend started');
@@ -83,7 +99,7 @@ function tryBackendFrontendSplit(projectDir, portStart) {
       cwd: fe,
       stdio: 'ignore',
       detached: true,
-      env: { ...process.env },
+      env: buildAppEnv(),
     });
     feChild.unref();
     log.info({ dir: fe, port: portStart }, 'Frontend started');
@@ -112,7 +128,7 @@ function tryServerIndex(projectDir, portStart) {
     cwd: projectDir,
     stdio: 'ignore',
     detached: true,
-    env: { ...process.env, PORT: String(portStart), HOST: '0.0.0.0' },
+    env: buildAppEnv({ PORT: String(portStart), HOST: '0.0.0.0' }),
   });
   child.unref();
 
@@ -127,7 +143,7 @@ function tryServerIndex(projectDir, portStart) {
       cwd: projectDir,
       stdio: 'ignore',
       detached: true,
-      env: { ...process.env, PORT: String(bePort), HOST: '0.0.0.0' },
+      env: buildAppEnv({ PORT: String(bePort), HOST: '0.0.0.0' }),
     });
     beChild.unref();
 
@@ -135,7 +151,7 @@ function tryServerIndex(projectDir, portStart) {
       cwd: clientDir,
       stdio: 'ignore',
       detached: true,
-      env: { ...process.env },
+      env: buildAppEnv(),
     });
     feChild.unref();
 
@@ -160,7 +176,7 @@ function tryNpmStart(projectDir, portStart) {
     cwd: projectDir,
     stdio: 'ignore',
     detached: true,
-    env: { ...process.env, PORT: String(portStart), HOST: '0.0.0.0' },
+    env: buildAppEnv({ PORT: String(portStart), HOST: '0.0.0.0' }),
   });
   child.unref();
 

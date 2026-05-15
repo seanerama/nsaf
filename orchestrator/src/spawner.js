@@ -281,8 +281,18 @@ Now run: /sdd:start --from architect`;
   // Strip API keys so Claude Code uses the subscription, not the API.
   // Exception: story projects need OPENAI_API_KEY (TTS narration) and
   // GEMINI_API_KEY/NANOBANANA_API_KEY (Nano Banana image generation).
+  //
+  // Also strip infrastructure secrets that no project session should ever
+  // see — the bot/digest/webhook is the only legitimate consumer of these,
+  // and a leak into a build log or a prompt-injected sub-agent would be
+  // a real-world incident.
   const cleanEnv = { ...process.env };
   delete cleanEnv.ANTHROPIC_API_KEY;
+  delete cleanEnv.WEBEX_BOT_TOKEN;
+  delete cleanEnv.WEBEX_WEBHOOK_SECRET;
+  delete cleanEnv.WEBEX_OWNER_PERSON_ID;
+  delete cleanEnv.RESEND_API_KEY;
+  delete cleanEnv.NGROK_AUTHTOKEN;
   if (projectType !== 'story') {
     delete cleanEnv.OPENAI_API_KEY;
     delete cleanEnv.GOOGLE_API_KEY;

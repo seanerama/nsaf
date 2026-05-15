@@ -753,6 +753,35 @@ def _slugify(name):
     return slug.strip("-")[:60]
 
 
+def _projects_root():
+    """Canonical absolute path of the projects directory."""
+    return os.path.realpath(os.environ.get("NSAF_PROJECTS_DIR", "./projects"))
+
+
+def _safe_project_dir(project_dir):
+    """Return the canonical project_dir only if it lives strictly inside the
+    projects root. Returns None otherwise — used as a guard before any
+    destructive filesystem operation on a path that came from the DB.
+    """
+    if not project_dir:
+        return None
+    try:
+        resolved = os.path.realpath(project_dir)
+    except (OSError, ValueError):
+        return None
+    root = _projects_root()
+    try:
+        if os.path.commonpath([resolved, root]) != root:
+            return None
+    except ValueError:
+        # Paths on different drives or otherwise incomparable
+        return None
+    if resolved == root:
+        # Never wipe the root itself
+        return None
+    return resolved
+
+
 def cmd_queue_idea(arg):
     """Add an idea to the build queue. Supports: 'queue <id>', 'queue story <id>', 'queue study <id>'."""
     kind, rest = _parse_kind_args(arg)
@@ -1375,11 +1404,19 @@ def cmd_delete(arg):
             except Exception:
                 pass
 
-        # Remove project directory
+        # Remove project directory — but only if it lives under NSAF_PROJECTS_DIR.
+        # A malformed DB row pointing at, say, /home/smahoney must not be wiped.
         project_dir = project.get("project_dir", "")
-        if project_dir and os.path.isdir(project_dir):
+        safe_dir = _safe_project_dir(project_dir)
+        if project_dir and not safe_dir:
+            errors.append(
+                f"`{target}` — refusing to delete `{project_dir}` "
+                f"(outside `{_projects_root()}`). Fix the DB row or remove the path manually."
+            )
+            continue
+        if safe_dir and os.path.isdir(safe_dir):
             import shutil
-            shutil.rmtree(project_dir, ignore_errors=True)
+            shutil.rmtree(safe_dir, ignore_errors=True)
 
         # Clean up DB
         db.execute("DELETE FROM queue WHERE project_id = ?", (project["id"],))
@@ -1419,10 +1456,17 @@ def cmd_rebuild(arg):
         except Exception:
             pass
 
-    # Remove old project directory
-    if project_dir and os.path.isdir(project_dir):
+    # Remove old project directory — but only if it lives under NSAF_PROJECTS_DIR.
+    safe_dir = _safe_project_dir(project_dir)
+    if project_dir and not safe_dir:
+        return (
+            f"Project `{slug}` has `project_dir` set to `{project_dir}` "
+            f"which is outside `{_projects_root()}`. Refusing to rebuild — "
+            f"fix the DB row first."
+        )
+    if safe_dir and os.path.isdir(safe_dir):
         import shutil
-        shutil.rmtree(project_dir, ignore_errors=True)
+        shutil.rmtree(safe_dir, ignore_errors=True)
 
     # Save rebuild notes to DB and re-queue
     rebuild_note = f"REBUILD: {notes}" if notes else "REBUILD from scratch"
