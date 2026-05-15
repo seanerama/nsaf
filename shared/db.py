@@ -291,6 +291,86 @@ def ensure_project_idea_link_columns():
     db.commit()
 
 
+# --- Vision session operations ---
+
+
+VISION_SESSIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS vision_sessions (
+    id INTEGER PRIMARY KEY,
+    slug TEXT UNIQUE NOT NULL,
+    person_id TEXT,
+    email TEXT,
+    raw_idea TEXT NOT NULL,
+    interpretation TEXT,
+    proposed_kind TEXT,
+    vision_md TEXT,
+    status TEXT NOT NULL DEFAULT 'drafted',
+    mode TEXT,
+    project_slug TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_vision_sessions_slug ON vision_sessions(slug);
+"""
+
+
+def vision_init():
+    db = get_db()
+    db.executescript(VISION_SESSIONS_SCHEMA)
+
+
+VISION_ALLOWED_FIELDS = frozenset({
+    "person_id", "email", "raw_idea", "interpretation", "proposed_kind",
+    "vision_md", "status", "mode", "project_slug",
+})
+
+
+def vision_insert(session):
+    """Insert a new vision session. session must have at least slug + raw_idea."""
+    vision_init()
+    db = get_db()
+    cols = ["slug", "raw_idea"] + [k for k in VISION_ALLOWED_FIELDS if k in session and k not in ("raw_idea",)]
+    placeholders = ", ".join(f":{c}" for c in cols)
+    col_list = ", ".join(cols)
+    cursor = db.execute(
+        f"INSERT INTO vision_sessions ({col_list}) VALUES ({placeholders})",
+        session,
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
+def vision_get(slug):
+    vision_init()
+    db = get_db()
+    row = db.execute("SELECT * FROM vision_sessions WHERE slug = ?", (slug,)).fetchone()
+    return dict(row) if row else None
+
+
+def vision_update(slug, **fields):
+    if not fields:
+        return
+    invalid = set(fields.keys()) - VISION_ALLOWED_FIELDS
+    if invalid:
+        raise ValueError(f"Invalid vision_sessions fields: {invalid}")
+    db = get_db()
+    fields["updated_at"] = "datetime('now')"
+    sets = ", ".join(f"{k} = ?" for k in fields if k != "updated_at")
+    sets += ", updated_at = datetime('now')"
+    values = [v for k, v in fields.items() if k != "updated_at"] + [slug]
+    db.execute(f"UPDATE vision_sessions SET {sets} WHERE slug = ?", values)
+    db.commit()
+
+
+def vision_list(limit=20):
+    vision_init()
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM vision_sessions ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # --- Project operations ---
 
 

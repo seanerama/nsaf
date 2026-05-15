@@ -16,6 +16,7 @@ from shared.db import (
     story_ideas_for_date, story_idea_get,
     study_ideas_for_date, study_idea_get,
     ensure_project_idea_link_columns,
+    vision_insert, vision_get, vision_update, vision_list,
 )
 
 
@@ -35,7 +36,7 @@ def handle_command(text, attachments=None):
         "promote": cmd_promote,
         "demote": cmd_demote,
         "ideas": cmd_ideas,
-        "idea": cmd_idea_detail,
+        "idea": cmd_idea,
         "stories": cmd_stories,
         "studies": cmd_studies,
         "generate": cmd_generate,
@@ -50,6 +51,7 @@ def handle_command(text, attachments=None):
         "story": cmd_story,
         "fetchstory": cmd_fetchstory,
         "storyfix": cmd_storyfix,
+        "vision": cmd_vision,
         "stopall": cmd_stopall,
         "stop": cmd_stop,
         "start": cmd_start,
@@ -64,7 +66,7 @@ def handle_command(text, attachments=None):
         return f"Unknown command: `{cmd}`. Type `help` for available commands."
 
     # Pass attachments to commands that support them
-    if cmd == "sws" and attachments:
+    if cmd in ("sws", "vision") and attachments:
         return handler(arg, attachments=attachments)
     return handler(arg)
 
@@ -279,6 +281,343 @@ def cmd_studies(arg):
         arg, kind="study", label="study",
         fetch_for_date=study_ideas_for_date, link_col="study_idea_id",
     )
+
+
+def cmd_idea(arg, attachments=None):
+    """Route `idea` command.
+
+    - `idea <id>` or `idea story <id>` / `idea study <id>` → detail
+    - `idea <free-form text>` → brainstorm a new vision session via Claude
+    """
+    if not arg or not arg.strip():
+        return ("Usage:\n"
+                "  `idea <id>` — show details for a generated idea\n"
+                "  `idea story <id>` / `idea study <id>` — kind-specific details\n"
+                "  `idea <free-form text>` — brainstorm a new idea with the bot")
+    kind, rest = _parse_kind_args(arg)
+    first = rest.split(None, 1)[0] if rest else ""
+    if first.isdigit():
+        return cmd_idea_detail(arg)
+    return cmd_idea_brainstorm(arg, attachments=attachments)
+
+
+def cmd_idea_brainstorm(raw_text, attachments=None):
+    """Take a free-form idea, ask Claude to expand it, save as a vision session."""
+    from bot.vision import expand_idea
+
+    raw_text = raw_text.strip()
+    if len(raw_text) < 10:
+        return "Give me a bit more — at least a sentence or two so I can work with it."
+
+    try:
+        result = expand_idea(raw_text)
+    except Exception as e:
+        return f"Couldn't expand that idea — {e}\nTry again with a bit more context?"
+
+    base = _slug_from_idea(result.get("title") or raw_text)
+    slug = base or "untitled"
+    n = 2
+    while vision_get(slug):
+        slug = f"{base}-{n}"
+        n += 1
+
+    vision_insert({
+        "slug": slug,
+        "raw_idea": raw_text,
+        "interpretation": result["interpretation"],
+        "proposed_kind": result["proposed_kind"],
+        "vision_md": result["vision_md"],
+        "status": "drafted",
+    })
+
+    lines = [
+        f"**Idea captured as `{slug}`**",
+        "",
+        f"_{result['interpretation']}_",
+        "",
+        f"**Best-fit kind:** `{result['proposed_kind']}`",
+        "",
+        "I've drafted a vision doc with follow-up questions. What's next?",
+        "",
+        f"- `vision email {slug}` — email the .md to you (edit, re-upload later)",
+        f"- `vision show {slug}` — render the doc here in Webex",
+        f"- `vision build {slug}` — skip the questions and build it now",
+        f"- `vision cancel {slug}` — drop it",
+    ]
+    return "\n".join(lines)
+
+
+def _extract_title(md):
+    """First H1 from a markdown doc."""
+    import re
+    if not md:
+        return None
+    m = re.search(r"^#\s+(.+)$", md, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def cmd_vision(arg, attachments=None):
+    """Vision-doc commands: show / email / build / list / cancel.
+
+    Special: `vision <slug>` with .md attached replaces the doc with the edited version.
+    """
+    parts = (arg or "").strip().split(None, 2)
+    sub = parts[0].lower() if parts else "list"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    rest2 = parts[2].strip() if len(parts) > 2 else ""
+
+    if sub == "list" or not sub:
+        sessions = vision_list(limit=20)
+        if not sessions:
+            return "No vision sessions yet. Start one with `idea <your idea text>`."
+        lines = ["**Vision sessions (most recent 20):**", ""]
+        for s in sessions:
+            kind = s.get("proposed_kind") or "—"
+            status = s.get("status") or "?"
+            built = f" → `{s['project_slug']}`" if s.get("project_slug") else ""
+            lines.append(f"- `{s['slug']}` [{kind}] — {status}{built}")
+        return "\n".join(lines)
+
+    # `vision <slug>` with attached .md → user uploading their edited version
+    if attachments and not rest:
+        session = vision_get(sub)
+        if session:
+            return _vision_apply_attachment(session, attachments)
+
+    if sub == "show" or sub == "view":
+        return _vision_show(rest)
+    if sub == "email":
+        return _vision_email(rest)
+    if sub == "build":
+        return _vision_build(rest, kind_override=rest2 or None)
+    if sub == "cancel":
+        return _vision_cancel(rest)
+
+    # Unknown sub — maybe it's actually a slug for show
+    session = vision_get(sub)
+    if session:
+        return _vision_show(sub)
+
+    return ("Usage:\n"
+            "  `vision list` — list sessions\n"
+            "  `vision show <slug>` — show a vision doc\n"
+            "  `vision email <slug>` — email the doc to yourself\n"
+            "  `vision build <slug> [kind]` — build a project from the doc\n"
+            "  `vision <slug>` (with .md attached) — replace the doc with your edited version\n"
+            "  `vision cancel <slug>` — drop a session")
+
+
+def _vision_show(slug):
+    if not slug:
+        return "Usage: `vision show <slug>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found. Try `vision list`."
+    lines = [
+        f"**Vision `{slug}`** — status: `{session.get('status', '?')}`",
+        f"**Kind:** {session.get('proposed_kind') or '—'}",
+        f"**Interpretation:** {session.get('interpretation') or '—'}",
+        "",
+        "---",
+        "",
+        session.get("vision_md") or "(no doc body)",
+    ]
+    return "\n".join(lines)
+
+
+def _vision_email(slug):
+    from bot.vision import send_vision_email
+    if not slug:
+        return "Usage: `vision email <slug>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    title = _extract_title(session.get("vision_md")) or slug
+    ok, info = send_vision_email(
+        slug, title,
+        session.get("raw_idea") or "",
+        session.get("vision_md") or "",
+    )
+    if ok:
+        vision_update(slug, status="emailed", mode="email")
+        return (f"Emailed vision `{slug}` to **{info}**.\n"
+                f"Edit the attached .md, then reply here with `vision {slug}` + the file.")
+    return f"Email failed: {info}"
+
+
+def _vision_cancel(slug):
+    if not slug:
+        return "Usage: `vision cancel <slug>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    vision_update(slug, status="cancelled")
+    return f"Vision `{slug}` cancelled."
+
+
+def _vision_apply_attachment(session, attachments):
+    """User uploaded an edited .md — replace vision_md and mark received."""
+    slug = session["slug"]
+    for att in attachments:
+        filename = att.get("filename", "")
+        content = att["content"]
+        if isinstance(content, bytes):
+            try:
+                content = content.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+        # Accept .md files or filenames containing 'vision'
+        if not (filename.lower().endswith(".md") or "vision" in filename.lower()):
+            continue
+        vision_update(slug, vision_md=content, status="received")
+        return (f"Got it — updated vision `{slug}` with your edits ({len(content)} chars).\n"
+                f"Ready: `vision build {slug}` to queue the project.")
+    return f"No .md attachment found on that message. Attach the edited vision-{slug}.md and resend."
+
+
+def _vision_build(slug, kind_override=None):
+    """Promote a vision session to an actual project."""
+    if not slug:
+        return "Usage: `vision build <slug> [story|studyws|app]`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    if session.get("status") == "built":
+        return f"Vision `{slug}` was already built as `{session.get('project_slug')}`."
+
+    kind = (kind_override or session.get("proposed_kind") or "unclear").lower()
+    if kind == "unclear":
+        return (f"Vision `{slug}` doesn't have a clear kind. Specify one:\n"
+                f"`vision build {slug} story` (or `studyws` / `app`)")
+    if kind not in ("story", "studyws", "app"):
+        return f"Unknown kind `{kind}`. Use one of: story / studyws / app."
+
+    vision_md = session.get("vision_md") or session.get("raw_idea") or ""
+    title = _extract_title(vision_md) or slug
+
+    try:
+        if kind == "story":
+            project_slug = _build_story_from_vision(slug, title, vision_md)
+        elif kind == "studyws":
+            project_slug = _build_studyws_from_vision(slug, title, vision_md)
+        else:
+            project_slug = _build_app_from_vision(slug, title, vision_md)
+    except Exception as e:
+        return f"Build failed for `{slug}`: {e}"
+
+    vision_update(slug, status="built", project_slug=project_slug)
+    return (f"Built **`{project_slug}`** from vision `{slug}` (kind: `{kind}`).\n"
+            f"Queued — will start when a slot opens. Track with `status`.")
+
+
+def _build_story_from_vision(vision_slug, title, vision_md):
+    import json as _json
+    import sqlite3 as _sqlite3
+    base = _slug_from_idea(title) or _slug_from_idea(vision_slug) or "untitled"
+    project_slug = f"story-{base}"
+    if project_get(project_slug):
+        project_slug = f"{project_slug}-{vision_slug[-6:]}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, project_slug)
+    os.makedirs(project_dir, exist_ok=True)
+
+    config = {
+        "idea": f"Title: {title}\n\n{vision_md}",
+        "scenes": "",
+        "style": "",
+        "notes": f"Generated from vision session {vision_slug}",
+    }
+    with open(os.path.join(project_dir, "story-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+    with open(os.path.join(project_dir, "vision-source.md"), "w") as f:
+        f.write(vision_md)
+
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'story', 'queued')",
+            (project_slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except _sqlite3.IntegrityError as e:
+        raise RuntimeError(f"Project insert failed: {e}")
+    queue_enqueue(pid)
+    return project_slug
+
+
+def _build_studyws_from_vision(vision_slug, title, vision_md):
+    import json as _json
+    import re as _re
+    import sqlite3 as _sqlite3
+    base = _re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "topic"
+    project_slug = f"sws-{base}"
+    if project_get(project_slug):
+        project_slug = f"{project_slug}-{vision_slug[-6:]}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, project_slug)
+    os.makedirs(project_dir, exist_ok=True)
+
+    with open(os.path.join(project_dir, "source-material.md"), "w") as f:
+        f.write(vision_md)
+    config = {
+        "topic": title,
+        "chapters": 10,
+        "level": "intermediate",
+        "notes": f"Generated from vision session {vision_slug}",
+        "source_url": "",
+        "has_source_file": True,
+    }
+    with open(os.path.join(project_dir, "studyws-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'studyws', 'queued')",
+            (project_slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except _sqlite3.IntegrityError as e:
+        raise RuntimeError(f"Project insert failed: {e}")
+    queue_enqueue(pid)
+    return project_slug
+
+
+def _build_app_from_vision(vision_slug, title, vision_md):
+    import re as _re
+    import sqlite3 as _sqlite3
+    db = get_db()
+    today = date.today().isoformat()
+    cursor = db.execute(
+        """INSERT INTO ideas (date, source, rank, name, description, category, complexity,
+               suggested_stack, temperature, tier)
+           VALUES (?, 'vision', 99, ?, ?, 'uncategorized', 'medium', '{}', 0, 'vision')""",
+        (today, title, vision_md[:2000]),
+    )
+    db.commit()
+    idea_id = cursor.lastrowid
+
+    base = _re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "untitled"
+    project_slug = base
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, project_slug)
+    try:
+        pid = project_create(project_slug, idea_id, project_dir)
+    except _sqlite3.IntegrityError:
+        project_slug = f"{project_slug}-{vision_slug[-6:]}"
+        project_dir = os.path.join(projects_dir, project_slug)
+        pid = project_create(project_slug, idea_id, project_dir)
+
+    os.makedirs(project_dir, exist_ok=True)
+    with open(os.path.join(project_dir, "vision.md"), "w") as f:
+        f.write(vision_md)
+
+    queue_enqueue(pid)
+    return project_slug
 
 
 def cmd_idea_detail(arg):
@@ -2548,11 +2887,20 @@ def cmd_help(_arg):
 - `stories` / `studies` — List today's story / study ideas (same paging + filters)
 - `idea <id>` — Detail for an app idea
 - `idea story <id>` / `idea study <id>` — Detail for a story / study idea
+- `idea <free-form text>` — Brainstorm: Claude expands the idea + drafts a vision doc
 - `queue <id>` — Add an app idea to the build queue
 - `queue story <id>` / `queue study <id>` — Build a story / study from a generated idea
 - `generate` — Trigger new app idea generation
 - `generate stories [N]` — Generate children's story ideas (per-provider count, default 10)
 - `generate studies [N]` — Generate study plan / textbook topic ideas
+
+**Vision Sessions** (refine an idea before building)
+- `vision list` — List recent vision sessions
+- `vision show <slug>` — Show a drafted vision doc
+- `vision email <slug>` — Email the .md to you for editing
+- `vision <slug>` (attach edited .md) — Replace the doc with your version
+- `vision build <slug> [story|studyws|app]` — Promote to a real project + queue
+- `vision cancel <slug>` — Drop a session
 
 **Lifecycle**
 - `promote <slug>` — Push to GitHub + deploy via Coolify to *.seanmahoney.ai
