@@ -13,6 +13,9 @@ from shared.db import (
     config_get, config_set,
     ideas_for_date, idea_get,
     project_create, get_db,
+    story_ideas_for_date, story_idea_get,
+    study_ideas_for_date, study_idea_get,
+    ensure_project_idea_link_columns,
 )
 
 
@@ -33,6 +36,8 @@ def handle_command(text, attachments=None):
         "demote": cmd_demote,
         "ideas": cmd_ideas,
         "idea": cmd_idea_detail,
+        "stories": cmd_stories,
+        "studies": cmd_studies,
         "generate": cmd_generate,
         "queue": cmd_queue_idea,
         "export": cmd_export,
@@ -90,10 +95,18 @@ def cmd_status(_arg):
             lines.append(f"- `{p['slug']}` — {phase} ({role}) [{progress}%]")
 
     if deployed:
-        lines.append("\n**Ready for Review:**")
-        for p in deployed:
+        recent = sorted(
+            deployed,
+            key=lambda p: p.get("completed_at") or p.get("last_state_change") or "",
+            reverse=True,
+        )[:10]
+        header = "\n**Ready for Review (last 10):**" if len(deployed) > 10 else "\n**Ready for Review:**"
+        lines.append(header)
+        for p in recent:
             url = p.get("deployed_url") or "—"
             lines.append(f"- `{p['slug']}` — {url}")
+        if len(deployed) > 10:
+            lines.append(f"_…{len(deployed) - 10} more. Use `export` for the full list._")
 
     if queued:
         lines.append(f"\n**Next in queue:** `{queued[0]['slug']}`")
@@ -165,10 +178,119 @@ def cmd_ideas(arg):
     return "\n".join(lines)
 
 
+def _parse_kind_args(arg):
+    """Pull a leading kind keyword (story/study) off arg.
+
+    Returns (kind, remainder). kind is 'app' (default), 'story', or 'study'.
+    """
+    parts = (arg or "").strip().split(None, 1)
+    if not parts:
+        return "app", ""
+    head = parts[0].lower()
+    if head in ("story", "stories"):
+        return "story", parts[1].strip() if len(parts) > 1 else ""
+    if head in ("study", "studies"):
+        return "study", parts[1].strip() if len(parts) > 1 else ""
+    return "app", arg.strip()
+
+
+def _list_kind_ideas(arg, *, kind, label, fetch_for_date, link_col):
+    """Shared listing for stories/studies. Mirrors cmd_ideas paging/filter."""
+    parts = arg.split() if arg else []
+    target_date = date.today().isoformat()
+    page = 1
+    source_filter = None
+
+    for p in parts:
+        if p.isdigit() and len(p) <= 2:
+            page = int(p)
+        elif len(p) == 10 and p[4:5] == '-':
+            target_date = p
+        elif p.lower() in ("openai", "gemini", "anthropic"):
+            source_filter = p.lower()
+
+    ideas = fetch_for_date(target_date)
+    if not ideas:
+        return f"No {label} ideas found for {target_date}. Run `generate {kind}s` to create new ideas."
+
+    ensure_project_idea_link_columns()
+    db = get_db()
+    project_rows = db.execute(
+        f"SELECT {link_col} as iid, slug, status FROM projects WHERE {link_col} IS NOT NULL"
+    ).fetchall()
+    idea_status = {p["iid"]: (p["slug"], p["status"]) for p in project_rows}
+
+    if source_filter:
+        ideas = [i for i in ideas if i.get("source") == source_filter]
+
+    per_page = 10
+    total_pages = max(1, (len(ideas) + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    start = (page - 1) * per_page
+    page_ideas = ideas[start:start + per_page]
+
+    plural = f"{label} ideas"
+    list_cmd = "stories" if kind == "story" else "studies"
+    lines = [f"**NSAF — {plural} for {target_date}** (page {page}/{total_pages})\n"]
+
+    for idea in page_ideas:
+        status_icon = "⬜"
+        status_text = ""
+        if idea["id"] in idea_status:
+            slug, st = idea_status[idea["id"]]
+            status_map = {
+                "building": ("🔨", " → building"),
+                "deployed-local": ("✅", " → deployed"),
+                "reviewing": ("✅", " → reviewing"),
+                "promoted": ("🚀", " → promoted"),
+                "queued": ("⏳", " → queued"),
+                "scrapped": ("❌", " → scrapped"),
+                "complete": ("✅", " → complete"),
+            }
+            status_icon, status_text = status_map.get(st, ("⬜", f" → {st}"))
+            status_text += f" `{slug}`"
+
+        source_tag = idea.get("source", "?")[0].upper()
+        tier = idea.get("tier", "") or ""
+        tier_tag = f" `{tier}`" if tier else ""
+        lines.append(f"- {status_icon} **#{idea['id']}** [{source_tag}]{tier_tag} {idea['name']}{status_text}")
+
+    lines.append(
+        f"\n{len(ideas)} {plural} total. "
+        f"`idea {kind} <id>` for details, `queue {kind} <id>` to build."
+    )
+    if total_pages > 1:
+        lines.append(f"`{list_cmd} {page + 1}` next page. `{list_cmd} openai` / gemini / anthropic to filter.")
+
+    return "\n".join(lines)
+
+
+def cmd_stories(arg):
+    """List today's story ideas. Supports: 'stories', 'stories 2', 'stories openai', 'stories 2026-04-01'."""
+    return _list_kind_ideas(
+        arg, kind="story", label="story",
+        fetch_for_date=story_ideas_for_date, link_col="story_idea_id",
+    )
+
+
+def cmd_studies(arg):
+    """List today's study ideas. Supports: 'studies', 'studies 2', 'studies openai', 'studies 2026-04-01'."""
+    return _list_kind_ideas(
+        arg, kind="study", label="study",
+        fetch_for_date=study_ideas_for_date, link_col="study_idea_id",
+    )
+
+
 def cmd_idea_detail(arg):
-    """Show details for a specific idea."""
+    """Show details for an idea. Supports: 'idea <id>', 'idea story <id>', 'idea study <id>'."""
+    kind, rest = _parse_kind_args(arg)
+    if kind == "story":
+        return _kind_idea_detail(rest, kind="story")
+    if kind == "study":
+        return _kind_idea_detail(rest, kind="study")
+
     if not arg:
-        return "Usage: `idea <id>`"
+        return "Usage: `idea <id>` or `idea story <id>` or `idea study <id>`"
     try:
         idea_id = int(arg)
     except ValueError:
@@ -217,6 +339,73 @@ def cmd_idea_detail(arg):
     return "\n".join(lines)
 
 
+def _kind_idea_detail(rest, *, kind):
+    if not rest:
+        return f"Usage: `idea {kind} <id>`"
+    try:
+        idea_id = int(rest)
+    except ValueError:
+        return f"Invalid {kind} idea ID: `{rest}`"
+
+    if kind == "story":
+        idea = story_idea_get(idea_id)
+        link_col = "story_idea_id"
+    else:
+        idea = study_idea_get(idea_id)
+        link_col = "study_idea_id"
+
+    if not idea:
+        return f"{kind.capitalize()} idea #{idea_id} not found."
+
+    ensure_project_idea_link_columns()
+    db = get_db()
+    project = db.execute(
+        f"SELECT slug, status, deployed_url, sdd_phase, sdd_active_role, sdd_progress "
+        f"FROM projects WHERE {link_col} = ?",
+        (idea_id,),
+    ).fetchone()
+
+    lines = [f"**{kind.capitalize()} Idea #{idea_id}: {idea['name']}**\n"]
+    lines.append(f"**Description:** {idea['description']}")
+    lines.append(f"**Source:** {idea['source']}  (tier: {idea.get('tier') or '—'})")
+    lines.append(f"**Generated:** {idea['date']}")
+
+    if kind == "story":
+        if idea.get("target_age"):
+            lines.append(f"**Target age:** {idea['target_age']}")
+        if idea.get("length_minutes"):
+            lines.append(f"**Length:** {idea['length_minutes']} min")
+        if idea.get("art_style_hint"):
+            lines.append(f"**Art style hint:** {idea['art_style_hint']}")
+        themes = idea.get("themes")
+        if themes:
+            try:
+                parsed = json.loads(themes) if isinstance(themes, str) else themes
+                if isinstance(parsed, list):
+                    themes = ", ".join(parsed)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            lines.append(f"**Themes:** {themes}")
+    else:
+        if idea.get("level"):
+            lines.append(f"**Level:** {idea['level']}")
+        if idea.get("chapters"):
+            lines.append(f"**Chapters:** {idea['chapters']}")
+        if idea.get("suggested_source_url"):
+            lines.append(f"**Source URL:** {idea['suggested_source_url']}")
+
+    if project:
+        lines.append(f"\n**Build Status:** `{project['status']}`")
+        lines.append(f"**Project:** `{project['slug']}`")
+        if project["deployed_url"]:
+            lines.append(f"**Local URL:** {project['deployed_url']}")
+    else:
+        lines.append(f"\n**Build Status:** not queued")
+        lines.append(f"Use `queue {kind} {idea_id}` to add to build queue.")
+
+    return "\n".join(lines)
+
+
 def _slugify(name):
     """Convert app name to a URL-safe slug."""
     import re
@@ -226,9 +415,15 @@ def _slugify(name):
 
 
 def cmd_queue_idea(arg):
-    """Add an idea to the build queue."""
+    """Add an idea to the build queue. Supports: 'queue <id>', 'queue story <id>', 'queue study <id>'."""
+    kind, rest = _parse_kind_args(arg)
+    if kind == "story":
+        return _queue_story_idea(rest)
+    if kind == "study":
+        return _queue_study_idea(rest)
+
     if not arg:
-        return "Usage: `queue <idea-id>`"
+        return "Usage: `queue <idea-id>` or `queue story <id>` or `queue study <id>`"
     try:
         idea_id = int(arg)
     except ValueError:
@@ -260,23 +455,194 @@ def cmd_queue_idea(arg):
     return f"Idea #{idea_id} (**{idea['name']}**) queued as `{slug}`. It will build when a slot opens."
 
 
-def cmd_generate(_arg):
-    """Trigger idea generation."""
+def _queue_story_idea(rest):
+    """Materialize a story_ideas row into a story project and enqueue it."""
+    if not rest:
+        return "Usage: `queue story <id>`"
+    try:
+        idea_id = int(rest)
+    except ValueError:
+        return f"Invalid story idea ID: `{rest}`"
+
+    idea = story_idea_get(idea_id)
+    if not idea:
+        return f"Story idea #{idea_id} not found."
+
+    ensure_project_idea_link_columns()
+    db = get_db()
+    existing = db.execute(
+        "SELECT slug, status FROM projects WHERE story_idea_id = ?", (idea_id,)
+    ).fetchone()
+    if existing:
+        return f"Story idea #{idea_id} already has project `{existing['slug']}` ({existing['status']})."
+
+    slug_base = _slug_from_idea(idea["name"]) or _slugify(idea["name"])
+    slug = f"story-{slug_base}"
+    if project_get(slug):
+        slug = f"{slug}-{idea_id}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, slug)
+    os.makedirs(project_dir, exist_ok=True)
+
+    import json as _json
+    config = {
+        "idea": idea["description"],
+        "scenes": "",
+        "style": idea.get("art_style_hint") or "",
+        "notes": f"target_age={idea.get('target_age') or ''}; length_minutes={idea.get('length_minutes') or ''}".strip("; "),
+    }
+    with open(os.path.join(project_dir, "story-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    import sqlite3
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status, story_idea_id) "
+            "VALUES (?, ?, 'story', 'queued', ?)",
+            (slug, project_dir, idea_id),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return f"Project `{slug}` already exists."
+
+    queue_enqueue(pid)
+    return (
+        f"Story idea #{idea_id} (**{idea['name']}**) queued as `{slug}`. "
+        f"Pipeline: concept → outline → script → illustrations → narration → MP4. "
+        f"Fetch with `fetchstory {slug}` when complete."
+    )
+
+
+def _queue_study_idea(rest):
+    """Materialize a study_ideas row into a studyws project and enqueue it."""
+    if not rest:
+        return "Usage: `queue study <id>`"
+    try:
+        idea_id = int(rest)
+    except ValueError:
+        return f"Invalid study idea ID: `{rest}`"
+
+    idea = study_idea_get(idea_id)
+    if not idea:
+        return f"Study idea #{idea_id} not found."
+
+    ensure_project_idea_link_columns()
+    db = get_db()
+    existing = db.execute(
+        "SELECT slug, status FROM projects WHERE study_idea_id = ?", (idea_id,)
+    ).fetchone()
+    if existing:
+        return f"Study idea #{idea_id} already has project `{existing['slug']}` ({existing['status']})."
+
+    import re
+    slug_base = re.sub(r'[^a-z0-9]+', '-', idea["name"].lower()).strip('-')[:60]
+    slug = f"sws-{slug_base}"
+    if project_get(slug):
+        slug = f"{slug}-{idea_id}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, slug)
+    os.makedirs(project_dir, exist_ok=True)
+
+    chapters = idea.get("chapters") or 12
+    level = (idea.get("level") or "intermediate").lower()
+    source_url = idea.get("suggested_source_url") or ""
+
+    import json as _json
+    config = {
+        "topic": idea["name"],
+        "chapters": chapters,
+        "level": level,
+        "notes": idea.get("description") or "",
+        "source_url": source_url,
+        "has_source_file": False,
+    }
+    with open(os.path.join(project_dir, "studyws-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    import sqlite3
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status, study_idea_id) "
+            "VALUES (?, ?, 'studyws', 'queued', ?)",
+            (slug, project_dir, idea_id),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return f"Project `{slug}` already exists."
+
+    queue_enqueue(pid)
+    summary = [
+        f"Study idea #{idea_id} (**{idea['name']}**) queued as `{slug}`.",
+        f"**Chapters:** {chapters}  **Level:** {level}",
+    ]
+    if source_url:
+        summary.append(f"**Source:** {source_url}")
+    summary.append("Will produce: textbook, study guides, slide descriptions, podcast prompt.")
+    return "\n".join(summary)
+
+
+_GENERATE_KINDS = {
+    "stories": {
+        "script": "generate_stories.py",
+        "label": "Story idea",
+        "follow_up": "ideas (story listing coming soon)",
+    },
+    "studies": {
+        "script": "generate_studies.py",
+        "label": "Study idea",
+        "follow_up": "ideas (study listing coming soon)",
+    },
+}
+
+
+def cmd_generate(arg):
+    """Trigger idea generation. Subcommands: '' (apps), 'stories [N]', 'studies [N]'."""
     nsaf_dir = os.environ.get("NSAF_DIR", os.path.join(os.path.dirname(__file__), "..", ".."))
     venv_python = os.path.join(nsaf_dir, "venv", "bin", "python")
-    script = os.path.join(nsaf_dir, "idea-generator", "generate.py")
 
+    parts = (arg or "").strip().split()
+    sub = parts[0].lower() if parts else ""
+    count = None
+    if len(parts) > 1:
+        try:
+            count = int(parts[1])
+        except ValueError:
+            return f"Invalid count: `{parts[1]}`. Usage: `generate {sub} [count]`"
+
+    if sub == "":
+        script_name = "generate.py"
+        label = "Idea"
+        follow_up = "`ideas`"
+        cmd = [venv_python, os.path.join(nsaf_dir, "idea-generator", script_name)]
+    elif sub in _GENERATE_KINDS:
+        meta = _GENERATE_KINDS[sub]
+        script_name = meta["script"]
+        label = meta["label"]
+        follow_up = meta["follow_up"]
+        cmd = [venv_python, os.path.join(nsaf_dir, "idea-generator", script_name)]
+        if count is not None:
+            cmd.extend(["--count", str(count)])
+    else:
+        valid = ", ".join(["(empty)"] + list(_GENERATE_KINDS.keys()))
+        return f"Unknown generate subcommand: `{sub}`. Valid: {valid}"
+
+    script = cmd[1]
     if not os.path.exists(script):
         return f"Generator script not found at `{script}`"
 
     try:
         result = subprocess.Popen(
-            [venv_python, script],
+            cmd,
             cwd=nsaf_dir,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        return f"Idea generation started (PID {result.pid}). Check back in a minute with `ideas`."
+        count_note = f" (count={count})" if count is not None else ""
+        return f"{label} generation started (PID {result.pid}){count_note}. Check back in a minute with {follow_up}."
     except Exception as e:
         return f"Failed to start generation: {e}"
 
@@ -457,23 +823,18 @@ def cmd_tokens(arg):
     return "\n".join(lines)
 
 
-def cmd_export(_arg):
-    """Export all ideas and projects as a CSV file."""
+def _export_ideas_csv(out_path):
+    """Write the apps idea export CSV. Returns (path, row_count, summary)."""
     import csv
     import io
-    import tempfile
 
     db = get_db()
-
-    # First fix stale phase data: deployed/archived/promoted projects shouldn't show "Design"
     db.execute("""
         UPDATE projects SET sdd_phase = 'complete', sdd_progress = 100
         WHERE status IN ('deployed-local', 'promoted', 'archived') AND sdd_phase IS NOT NULL AND sdd_phase != 'complete'
     """)
     db.commit()
 
-    # Get all ideas with their project status (if any)
-    # Use COALESCE for temperature/tier since old rows won't have them
     rows = db.execute("""
         SELECT
             i.id as idea_id, i.date, i.source, i.name, i.description,
@@ -514,17 +875,131 @@ def cmd_export(_arg):
             r["started_at"] or "", r["completed_at"] or "",
         ])
 
-    csv_path = os.path.join(tempfile.gettempdir(), "nsaf-export.csv")
-    with open(csv_path, "w") as f:
+    with open(out_path, "w") as f:
         f.write(buf.getvalue())
 
     queued_count = sum(1 for r in rows if r["status"])
     unqueued_count = sum(1 for r in rows if not r["status"])
+    summary = f"{len(rows)} ideas ({queued_count} built/queued, {unqueued_count} not queued)"
+    return out_path, len(rows), summary
 
-    return {
-        "text": f"**Nightshift AutoFoundry Export** — {len(rows)} ideas ({queued_count} built/queued, {unqueued_count} not queued)",
-        "files": [csv_path],
-    }
+
+def _export_stories_csv(out_path):
+    """Write the story idea export CSV. Returns (path, row_count, summary)."""
+    import csv
+    import io
+
+    db = get_db()
+    table_exists = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='story_ideas'"
+    ).fetchone()
+    rows = db.execute("""
+        SELECT id as idea_id, date, source,
+               COALESCE(temperature, 0) as temperature,
+               COALESCE(tier, '') as tier,
+               name, description, target_age, length_minutes, art_style_hint, themes
+        FROM story_ideas
+        ORDER BY date DESC, source, temperature
+    """).fetchall() if table_exists else []
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "idea_id", "date", "source", "temperature", "tier",
+        "name", "description", "target_age", "length_minutes",
+        "art_style_hint", "themes",
+    ])
+    for r in rows:
+        writer.writerow([
+            r["idea_id"], r["date"], r["source"],
+            r["temperature"], r["tier"],
+            r["name"], r["description"],
+            r["target_age"] or "", r["length_minutes"] or "",
+            r["art_style_hint"] or "", r["themes"] or "",
+        ])
+
+    with open(out_path, "w") as f:
+        f.write(buf.getvalue())
+
+    return out_path, len(rows), f"{len(rows)} story ideas"
+
+
+def _export_studies_csv(out_path):
+    """Write the study idea export CSV. Returns (path, row_count, summary)."""
+    import csv
+    import io
+
+    db = get_db()
+    table_exists = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='study_ideas'"
+    ).fetchone()
+    rows = db.execute("""
+        SELECT id as idea_id, date, source,
+               COALESCE(temperature, 0) as temperature,
+               COALESCE(tier, '') as tier,
+               name, description, level, chapters, suggested_source_url
+        FROM study_ideas
+        ORDER BY date DESC, source, temperature
+    """).fetchall() if table_exists else []
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "idea_id", "date", "source", "temperature", "tier",
+        "name", "description", "level", "chapters", "suggested_source_url",
+    ])
+    for r in rows:
+        writer.writerow([
+            r["idea_id"], r["date"], r["source"],
+            r["temperature"], r["tier"],
+            r["name"], r["description"],
+            r["level"] or "", r["chapters"] or "",
+            r["suggested_source_url"] or "",
+        ])
+
+    with open(out_path, "w") as f:
+        f.write(buf.getvalue())
+
+    return out_path, len(rows), f"{len(rows)} study ideas"
+
+
+def cmd_export(arg):
+    """Export ideas as CSV. Subcommands: '' (ideas), 'ideas', 'stories', 'studies', 'all'."""
+    import tempfile
+    import zipfile
+
+    sub = (arg or "").strip().lower()
+    tmp = tempfile.gettempdir()
+
+    if sub in ("", "ideas"):
+        path, _, summary = _export_ideas_csv(os.path.join(tmp, "nsaf-export.csv"))
+        return {"text": f"**Nightshift AutoFoundry Export** — {summary}", "files": [path]}
+
+    if sub == "stories":
+        path, _, summary = _export_stories_csv(os.path.join(tmp, "nsaf-export-stories.csv"))
+        return {"text": f"**Story Idea Export** — {summary}", "files": [path]}
+
+    if sub == "studies":
+        path, _, summary = _export_studies_csv(os.path.join(tmp, "nsaf-export-studies.csv"))
+        return {"text": f"**Study Idea Export** — {summary}", "files": [path]}
+
+    if sub == "all":
+        ideas_path, n_ideas, ideas_sum = _export_ideas_csv(os.path.join(tmp, "nsaf-export-ideas.csv"))
+        stories_path, n_stories, stories_sum = _export_stories_csv(os.path.join(tmp, "nsaf-export-stories.csv"))
+        studies_path, n_studies, studies_sum = _export_studies_csv(os.path.join(tmp, "nsaf-export-studies.csv"))
+        zip_path = os.path.join(tmp, "nsaf-export-all.zip")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(ideas_path, "nsaf-export-ideas.csv")
+            zf.write(stories_path, "nsaf-export-stories.csv")
+            zf.write(studies_path, "nsaf-export-studies.csv")
+        return {
+            "text": (
+                f"**NSAF Full Export** — {ideas_sum}; {stories_sum}; {studies_sum}"
+            ),
+            "files": [zip_path],
+        }
+
+    return f"Unknown export target: `{sub}`. Valid: ideas, stories, studies, all"
 
 
 def cmd_delete(arg):
@@ -1503,10 +1978,14 @@ def _remove_cloudflare_tunnel_route(hostname):
         pass
 
 
-def cmd_promote(slug):
-    """Full promotion: GitHub → Coolify → Cloudflare tunnel + DNS → live subdomain."""
+def cmd_promote(arg):
+    """Promote: '<slug>' (app→Coolify) or 'study <slug> [--slug X]' (sws→seanmahoney.ai)."""
+    kind, rest = _parse_kind_args(arg)
+    if kind == "study":
+        return _promote_study(rest)
+    slug = arg.strip() if arg else ""
     if not slug:
-        return "Usage: `promote <slug>`"
+        return "Usage: `promote <slug>` (app) or `promote study <slug>` (study guide)"
     project = project_get(slug)
     if not project:
         return f"Project `{slug}` not found."
@@ -1797,6 +2276,260 @@ console.log(result ? 'ok' : 'failed');
     return "\n".join(lines)
 
 
+# Light-mode → dark-mode CSS variable swap for study guide HTML.
+# Keys are the light-mode declaration, values are the dark-mode replacement.
+_STUDY_GUIDE_DARK_MODE_SWAPS = [
+    ("--color-bg: #fafafa",                    "--color-bg: #0a0a0f"),
+    ("--color-surface: #ffffff",               "--color-surface: #1a1d2e"),
+    ("--color-text: #1a1a1a",                  "--color-text: #e0e0e8"),
+    ("--color-muted: #6b7280",                 "--color-muted: #9ca3af"),
+    ("--color-primary: #2563eb",               "--color-primary: #818cf8"),
+    ("--color-primary-light: #dbeafe",         "--color-primary-light: #1e1b4b"),
+    ("--color-success: #16a34a",               "--color-success: #4ade80"),
+    ("--color-success-light: #dcfce7",         "--color-success-light: #052e16"),
+    ("--color-error: #dc2626",                 "--color-error: #f87171"),
+    ("--color-error-light: #fee2e2",           "--color-error-light: #450a0a"),
+    ("--color-border: #e5e7eb",                "--color-border: #2a2f42"),
+    ("--color-quiz-bg: #f0f4ff",               "--color-quiz-bg: #12151f"),
+    ("--color-keypoints-bg: #fffbeb",          "--color-keypoints-bg: #1a1700"),
+    ("--color-keypoints-border: #f59e0b",      "--color-keypoints-border: #d97706"),
+    ("--shadow: 0 1px 3px rgba(0,0,0,0.1)",    "--shadow: 0 1px 3px rgba(0,0,0,0.4)"),
+]
+
+
+def _find_sws_output_dir(project_dir):
+    """SWS layout: <project_dir>/output/<topic-slug>/{guides,chapters,textbook.md}."""
+    output_root = os.path.join(project_dir, "output")
+    if not os.path.isdir(output_root):
+        return None
+    for entry in sorted(os.listdir(output_root)):
+        candidate = os.path.join(output_root, entry)
+        if os.path.isdir(os.path.join(candidate, "guides")) and os.path.isdir(os.path.join(candidate, "chapters")):
+            return candidate
+    return None
+
+
+def _extract_chapter_title(md_path):
+    """Pull the first '## Chapter N: Title' (or '# Title') heading from a chapter md."""
+    import re
+    try:
+        with open(md_path) as f:
+            for _ in range(20):
+                line = f.readline()
+                if not line:
+                    break
+                m = re.match(r"^#{1,3}\s*(?:Chapter\s*\d+\s*[:\-]\s*)?(.+?)\s*$", line)
+                if m and m.group(1).strip():
+                    return m.group(1).strip()
+    except OSError:
+        pass
+    return None
+
+
+def _next_study_guide_order(repo_dir):
+    import re
+    yaml_dir = os.path.join(repo_dir, "src", "content", "studyGuides")
+    highest = 0
+    if os.path.isdir(yaml_dir):
+        for fn in os.listdir(yaml_dir):
+            if not fn.endswith(".yaml"):
+                continue
+            try:
+                with open(os.path.join(yaml_dir, fn)) as f:
+                    for line in f:
+                        m = re.match(r"^order:\s*(\d+)", line)
+                        if m:
+                            highest = max(highest, int(m.group(1)))
+                            break
+            except OSError:
+                continue
+    return highest + 1
+
+
+def _yaml_quote(s):
+    """Minimal YAML double-quoted string escape for title/description fields."""
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _run_git(repo, *args, check=True, capture=True):
+    """Run a git command in the website repo. Returns CompletedProcess."""
+    return subprocess.run(
+        ["git", "-C", repo, *args],
+        capture_output=capture, text=True, check=check, timeout=120,
+    )
+
+
+def _promote_study(rest):
+    """Deploy an SWS project's output to seanmahoney.ai via the Astro repo."""
+    import re
+    import shutil
+
+    if not rest:
+        return ("Usage: `promote study <sws-slug> [--slug web-slug]`\n"
+                "Example: `promote study sws-ccie-automation --slug ccie-automation`")
+
+    web_slug_override, rest = _extract_flag(rest, "slug")
+    project_slug = rest.strip().split()[0] if rest.strip() else ""
+    if not project_slug:
+        return "Usage: `promote study <sws-slug> [--slug web-slug]`"
+
+    project = project_get(project_slug)
+    if not project:
+        return f"Project `{project_slug}` not found."
+    if (project.get("project_type") or "app") != "studyws":
+        return f"`{project_slug}` is project_type `{project.get('project_type')}`, not `studyws`."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{project_slug}` not found."
+
+    repo = os.environ.get("NSAF_WEBSITE_REPO", "")
+    bun = os.environ.get("BUN_PATH", "bun")
+    if not repo or not os.path.isdir(repo):
+        return ("`NSAF_WEBSITE_REPO` is not set or directory does not exist. "
+                "Set it in `.env` to the cloned website repo path.")
+
+    sws_out = _find_sws_output_dir(project_dir)
+    if not sws_out:
+        return f"No SWS output dir found under `{project_dir}/output/*/{{guides,chapters}}`."
+
+    guides_src = os.path.join(sws_out, "guides")
+    chapters_src = os.path.join(sws_out, "chapters")
+    textbook_src = os.path.join(sws_out, "textbook.md")
+
+    html_files = sorted(f for f in os.listdir(guides_src) if re.match(r"chapter-\d+\.html$", f))
+    if not html_files:
+        return f"No `chapter-NN.html` files found in `{guides_src}`."
+
+    # Map chapter-NN.html -> chapter-NN.md to extract the chapter title
+    chapter_titles = []
+    for html_name in html_files:
+        md_name = html_name.replace(".html", ".md")
+        md_path = os.path.join(chapters_src, md_name)
+        title = _extract_chapter_title(md_path) if os.path.isfile(md_path) else None
+        chapter_titles.append((html_name, title or html_name.replace(".html", "")))
+
+    web_slug = (web_slug_override or "").strip() or re.sub(r"^sws-", "", project_slug)
+    web_slug = re.sub(r"[^a-z0-9-]+", "-", web_slug.lower()).strip("-")
+    if not web_slug:
+        return f"Could not derive a web slug from `{project_slug}`. Pass `--slug` explicitly."
+
+    yaml_path = os.path.join(repo, "src", "content", "studyGuides", f"{web_slug}.yaml")
+    target_dir = os.path.join(repo, "public", "study-guides", web_slug)
+    textbook_dst = os.path.join(repo, "src", "content", "textbooks", f"{web_slug}.md")
+
+    if os.path.exists(yaml_path) or os.path.isdir(target_dir):
+        return (f"Study guide `{web_slug}` already exists in the website repo. "
+                f"Delete it first or pass `--slug <other-name>`.")
+
+    lines = [f"**Promoting study guide `{project_slug}` → `{web_slug}`**\n"]
+
+    # Step 1: ensure repo is clean and up to date
+    try:
+        _run_git(repo, "fetch", "origin", "main")
+        status = _run_git(repo, "status", "--porcelain").stdout.strip()
+        if status:
+            return (f"Website repo at `{repo}` has uncommitted changes:\n```\n{status}\n```\n"
+                    f"Commit or stash them on the laptop, push, then retry.")
+        _run_git(repo, "pull", "--ff-only", "origin", "main")
+    except subprocess.CalledProcessError as e:
+        return f"Failed to sync website repo: {e.stderr or e.stdout}"
+
+    # Step 2: copy HTML guides + dark-mode CSS swap
+    os.makedirs(target_dir, exist_ok=True)
+    swapped_count = 0
+    for html_name in html_files:
+        src = os.path.join(guides_src, html_name)
+        dst = os.path.join(target_dir, html_name)
+        with open(src) as f:
+            content = f.read()
+        if "--color-bg: #fafafa" in content:
+            for old, new in _STUDY_GUIDE_DARK_MODE_SWAPS:
+                content = content.replace(old, new)
+            swapped_count += 1
+        with open(dst, "w") as f:
+            f.write(content)
+    lines.append(
+        f"1. Copied {len(html_files)} HTML guide(s)"
+        + (f" (dark-mode swapped: {swapped_count})" if swapped_count else " (already dark-mode)")
+    )
+
+    # Step 3: write YAML
+    order = _next_study_guide_order(repo)
+    title = (project.get("slug") or web_slug).replace("sws-", "").replace("-", " ").title()
+    desc = f"Study guide for {title} — generated by NSAF StudyWS pipeline."
+    with open(yaml_path, "w") as f:
+        f.write(f"title: {_yaml_quote(title)}\n")
+        f.write(f'slug: "{web_slug}"\n')
+        f.write(f"description: {_yaml_quote(desc)}\n")
+        f.write(f"order: {order}\n")
+        f.write("chapters:\n")
+        for html_name, ch_title in chapter_titles:
+            f.write(f"  - title: {_yaml_quote(ch_title)}\n")
+            f.write(f'    htmlFile: "{html_name}"\n')
+    lines.append(f"2. Wrote YAML at order={order}: `{web_slug}.yaml`")
+
+    # Step 4: textbook companion (optional)
+    has_textbook = os.path.isfile(textbook_src)
+    if has_textbook:
+        with open(textbook_src) as f:
+            text = f.read()
+        h1_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+        book_title = h1_match.group(1).strip() if h1_match else title
+        os.makedirs(os.path.dirname(textbook_dst), exist_ok=True)
+        with open(textbook_dst, "w") as f:
+            f.write(f"---\n")
+            f.write(f"title: {_yaml_quote(book_title)}\n")
+            f.write(f'studyGuideSlug: "{web_slug}"\n')
+            f.write(f"---\n\n")
+            f.write(text)
+        lines.append(f"3. Wrote textbook companion: `textbooks/{web_slug}.md`")
+    else:
+        lines.append("3. No textbook.md present — skipping companion")
+
+    # Step 5: bun verify build
+    try:
+        result = subprocess.run(
+            [bun, "run", "build"], cwd=repo,
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout).splitlines()[-15:]
+            # Roll back our changes — repo was clean before we started
+            _run_git(repo, "reset", "--hard", "HEAD", capture=False, check=False)
+            _run_git(repo, "clean", "-fd", capture=False, check=False)
+            lines.append(f"4. ❌ `bun run build` failed — changes reverted.\n```\n" + "\n".join(tail) + "\n```")
+            return "\n".join(lines)
+    except subprocess.TimeoutExpired:
+        _run_git(repo, "reset", "--hard", "HEAD", capture=False, check=False)
+        _run_git(repo, "clean", "-fd", capture=False, check=False)
+        lines.append("4. ❌ `bun run build` timed out after 5 minutes — changes reverted.")
+        return "\n".join(lines)
+    lines.append(f"4. ✅ `bun run build` passed")
+
+    # Step 6: commit + push
+    try:
+        _run_git(repo, "add",
+                 f"public/study-guides/{web_slug}",
+                 f"src/content/studyGuides/{web_slug}.yaml")
+        if has_textbook:
+            _run_git(repo, "add", f"src/content/textbooks/{web_slug}.md")
+        commit_msg = f"Add {title} study guide ({len(html_files)} chapters)"
+        _run_git(repo, "commit", "-m", commit_msg)
+        _run_git(repo, "push", "origin", "main")
+    except subprocess.CalledProcessError as e:
+        lines.append(f"5. ❌ git commit/push failed: {(e.stderr or e.stdout).strip()}")
+        return "\n".join(lines)
+    lines.append(f"5. Pushed to `origin/main` — Cloudflare Pages will auto-deploy")
+
+    domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
+    lines.append(f"\n**Live in ~60s at:** https://{domain}/study-guides/{web_slug}/chapter-01.html")
+    if has_textbook:
+        lines.append(f"**Textbook:** https://{domain}/study-guides/{web_slug}/textbook")
+
+    return "\n".join(lines)
+
+
 def cmd_help(_arg):
     return """**Nightshift AutoFoundry Commands**
 
@@ -1811,19 +2544,26 @@ def cmd_help(_arg):
 - `modify <slug> <changes>` — Apply changes to existing build
 
 **Ideas**
-- `ideas` — List today's ideas (page 1)
-- `ideas 2` / `ideas openai` — Page or filter
-- `idea <id>` — Detailed view of an idea
-- `queue <id>` — Add an idea to the build queue
-- `generate` — Trigger new idea generation
+- `ideas` / `ideas 2` / `ideas openai` — List today's app ideas (paginate / filter by source)
+- `stories` / `studies` — List today's story / study ideas (same paging + filters)
+- `idea <id>` — Detail for an app idea
+- `idea story <id>` / `idea study <id>` — Detail for a story / study idea
+- `queue <id>` — Add an app idea to the build queue
+- `queue story <id>` / `queue study <id>` — Build a story / study from a generated idea
+- `generate` — Trigger new app idea generation
+- `generate stories [N]` — Generate children's story ideas (per-provider count, default 10)
+- `generate studies [N]` — Generate study plan / textbook topic ideas
 
 **Lifecycle**
 - `promote <slug>` — Push to GitHub + deploy via Coolify to *.seanmahoney.ai
+- `promote study <slug> [--slug name]` — Deploy an SWS project to seanmahoney.ai/study-guides/&lt;name&gt;
 - `demote <slug>` — Remove from Coolify, revert to local
 - `archive <slug>` — Stop locally, release ports, keep files
 - `delete <id> [id...]` — Permanently delete projects
 - `gitpush <slug>` — Push to a public GitHub repo
-- `export` — Download CSV of all projects
+- `export` / `export ideas` — Download CSV of app ideas + projects
+- `export stories` / `export studies` — Download CSV of generated story / study ideas
+- `export all` — Download a ZIP containing all three CSVs
 
 **Content Generation**
 - `sws <topic>` — Generate a textbook + study guides for a topic

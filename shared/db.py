@@ -106,6 +106,191 @@ def history_all():
     return [dict(r) for r in rows]
 
 
+# --- Story idea operations ---
+
+
+STORY_IDEAS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS story_ideas (
+    id INTEGER PRIMARY KEY,
+    date TEXT NOT NULL,
+    source TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    target_age TEXT,
+    length_minutes INTEGER,
+    art_style_hint TEXT,
+    themes TEXT,
+    temperature REAL,
+    tier TEXT,
+    selected INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS story_idea_history (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    date TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_story_ideas_date ON story_ideas(date);
+"""
+
+
+def story_ideas_init():
+    db = get_db()
+    db.executescript(STORY_IDEAS_SCHEMA)
+
+
+def story_ideas_insert_batch(ideas):
+    db = get_db()
+    padded = [
+        {
+            "temperature": 0,
+            "tier": "unknown",
+            "target_age": None,
+            "length_minutes": None,
+            "art_style_hint": None,
+            "themes": None,
+            **idea,
+        }
+        for idea in ideas
+    ]
+    db.executemany(
+        """INSERT INTO story_ideas (date, source, rank, name, description, target_age,
+               length_minutes, art_style_hint, themes, temperature, tier)
+           VALUES (:date, :source, :rank, :name, :description, :target_age,
+                   :length_minutes, :art_style_hint, :themes, :temperature, :tier)""",
+        padded,
+    )
+    db.commit()
+
+
+def story_ideas_for_date(date):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM story_ideas WHERE date = ? ORDER BY source, rank", (date,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def story_idea_get(id):
+    db = get_db()
+    row = db.execute("SELECT * FROM story_ideas WHERE id = ?", (id,)).fetchone()
+    return dict(row) if row else None
+
+
+def story_history_insert_batch(items):
+    db = get_db()
+    db.executemany(
+        "INSERT INTO story_idea_history (name, description, date) VALUES (:name, :description, :date)",
+        items,
+    )
+    db.commit()
+
+
+def story_history_all():
+    db = get_db()
+    rows = db.execute("SELECT * FROM story_idea_history ORDER BY date DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Study idea operations ---
+
+
+STUDY_IDEAS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS study_ideas (
+    id INTEGER PRIMARY KEY,
+    date TEXT NOT NULL,
+    source TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    level TEXT,
+    chapters INTEGER,
+    suggested_source_url TEXT,
+    temperature REAL,
+    tier TEXT,
+    selected INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS study_idea_history (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    date TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_study_ideas_date ON study_ideas(date);
+"""
+
+
+def study_ideas_init():
+    db = get_db()
+    db.executescript(STUDY_IDEAS_SCHEMA)
+
+
+def study_ideas_insert_batch(ideas):
+    db = get_db()
+    padded = [
+        {
+            "temperature": 0,
+            "tier": "unknown",
+            "level": None,
+            "chapters": None,
+            "suggested_source_url": None,
+            **idea,
+        }
+        for idea in ideas
+    ]
+    db.executemany(
+        """INSERT INTO study_ideas (date, source, rank, name, description, level,
+               chapters, suggested_source_url, temperature, tier)
+           VALUES (:date, :source, :rank, :name, :description, :level,
+                   :chapters, :suggested_source_url, :temperature, :tier)""",
+        padded,
+    )
+    db.commit()
+
+
+def study_ideas_for_date(date):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM study_ideas WHERE date = ? ORDER BY source, rank", (date,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def study_idea_get(id):
+    db = get_db()
+    row = db.execute("SELECT * FROM study_ideas WHERE id = ?", (id,)).fetchone()
+    return dict(row) if row else None
+
+
+def study_history_insert_batch(items):
+    db = get_db()
+    db.executemany(
+        "INSERT INTO study_idea_history (name, description, date) VALUES (:name, :description, :date)",
+        items,
+    )
+    db.commit()
+
+
+def study_history_all():
+    db = get_db()
+    rows = db.execute("SELECT * FROM study_idea_history ORDER BY date DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def ensure_project_idea_link_columns():
+    """Add story_idea_id / study_idea_id columns to the projects table if missing."""
+    db = get_db()
+    cols = {r[1] for r in db.execute("PRAGMA table_info(projects)").fetchall()}
+    if "story_idea_id" not in cols:
+        db.execute("ALTER TABLE projects ADD COLUMN story_idea_id INTEGER")
+    if "study_idea_id" not in cols:
+        db.execute("ALTER TABLE projects ADD COLUMN study_idea_id INTEGER")
+    db.commit()
+
+
 # --- Project operations ---
 
 

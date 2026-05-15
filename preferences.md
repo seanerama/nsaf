@@ -11,13 +11,13 @@
 - Creative & Hobby: reading lists, movie watchlists, music discovery logs, travel planners, plant care trackers, collection catalogers
 - Developer & Tech: API testers, readme generators, changelog builders, uptime monitors, environment diff tools, snippet managers
 - Fun & Niche: trivia generators, bracket builders, fantasy draft boards, prediction trackers, sports memory quizzes, league history archives
+- Apps for Real Estate Agents to help with lead generation and property analysis
+ 
 
 ## Exclusions
-- gambling
 - adult content
 - violent games
 - social media clones
-- crypto/blockchain
 
 ## Tech Stack
 - Frontend: React preferred
@@ -41,4 +41,4 @@
 balanced
 
 ## Daily Quota
-30
+60

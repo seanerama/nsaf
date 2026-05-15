@@ -29,6 +29,19 @@ TEMPERATURE_TIERS = {
 DEFAULT_TIERS = TEMPERATURE_TIERS["openai"]
 
 
+def scale_tiers(tiers, total_count):
+    """Proportionally rescale a tier list so its counts sum to roughly total_count.
+
+    Each tier keeps at least 1 idea so all temperature ranges remain represented.
+    """
+    base = sum(c for _, c, _ in tiers)
+    if base == 0 or total_count <= 0 or base == total_count:
+        return list(tiers)
+    factor = total_count / base
+    scaled = [(t, max(1, round(c * factor)), label) for t, c, label in tiers]
+    return scaled
+
+
 def build_prompt(preferences, history_names, count, already_generated=None):
     """Build prompt requesting ideas. Includes already-generated ideas to avoid dupes."""
     categories = ", ".join(preferences.get("categories", []))
@@ -78,5 +91,120 @@ Respond with a JSON array of exactly {count} objects (no markdown, no code fence
       "database": "database",
       "css": "css approach"
     }}
+  }}
+]{history_section}{already_section}"""
+
+
+def _format_list(items):
+    return "\n".join(f"- {item}" for item in items) if items else "(none)"
+
+
+def build_story_prompt(preferences, history_names, count, already_generated=None):
+    """Build prompt requesting children's story seed ideas."""
+    themes = _format_list(preferences.get("themes", []))
+    settings = _format_list(preferences.get("settings", []))
+    characters = _format_list(preferences.get("character_types", []))
+    exclusions = _format_list(preferences.get("exclusions", []))
+    art_styles = ", ".join(preferences.get("art_style_defaults", [])) or "watercolor storybook"
+    tone = ", ".join(preferences.get("tone", [])) or "warm, gentle"
+    target_age = preferences.get("target_age", {"min": 4, "max": 8})
+    length = preferences.get("length", {"min_minutes": 4, "max_minutes": 10})
+
+    history_section = ""
+    if history_names:
+        history_section = (
+            "\n\nDo NOT suggest stories similar to these previously generated ideas:\n"
+            + "\n".join(f"- {name}" for name in history_names[-100:])
+        )
+
+    already_section = ""
+    if already_generated:
+        already_section = (
+            "\n\nDo NOT suggest stories similar to these (already generated this session):\n"
+            + "\n".join(f"- {name}" for name in already_generated)
+        )
+
+    return f"""Generate exactly {count} unique illustrated children's audio story ideas. Each story idea must be distinctly different — different protagonists, different conflicts, different emotional arcs.
+
+Themes to draw from:
+{themes}
+
+Settings to draw from:
+{settings}
+
+Character types to draw from:
+{characters}
+
+NEVER include any of the following:
+{exclusions}
+
+Target age range: {target_age.get('min', 4)}-{target_age.get('max', 8)} years
+Target narrated length: {length.get('min_minutes', 4)}-{length.get('max_minutes', 10)} minutes
+Tone: {tone}
+Default art style: {art_styles}
+
+Each story should have a clear emotional arc that resolves with comfort or quiet hope. Avoid scary imagery, on-page violence, and preachy dialogue. The story should be self-contained and tell-able as a single bedtime listen.
+
+Respond with a JSON array of exactly {count} objects (no markdown, no code fences, no extra text):
+[
+  {{
+    "name": "Short Story Title (4-8 words)",
+    "description": "2-3 sentence story seed describing the protagonist, the conflict, and the resolution arc. Concrete and visual.",
+    "target_age": "e.g. 5-8",
+    "length_minutes": 6,
+    "art_style_hint": "e.g. watercolor storybook",
+    "themes": ["one", "or two", "themes from the list above"]
+  }}
+]{history_section}{already_section}"""
+
+
+def build_study_prompt(preferences, history_names, count, already_generated=None):
+    """Build prompt requesting study plan / textbook topic ideas."""
+    domains = _format_list(preferences.get("subject_domains", []))
+    source_pref = _format_list(preferences.get("source_material_tendency", []))
+    exclusions = _format_list(preferences.get("exclusions", []))
+    tone = ", ".join(preferences.get("tone", [])) or "technical, precise"
+    levels = preferences.get("levels", {"min": "intermediate", "max": "advanced"})
+    chapters = preferences.get("chapter_range", {"min": 8, "max": 20})
+
+    history_section = ""
+    if history_names:
+        history_section = (
+            "\n\nDo NOT suggest topics similar to these previously generated ideas:\n"
+            + "\n".join(f"- {name}" for name in history_names[-100:])
+        )
+
+    already_section = ""
+    if already_generated:
+        already_section = (
+            "\n\nDo NOT suggest topics similar to these (already generated this session):\n"
+            + "\n".join(f"- {name}" for name in already_generated)
+        )
+
+    return f"""Generate exactly {count} unique study plan / textbook topic ideas. Each topic must cover a genuinely different subject area or angle — not minor variations of one another.
+
+Subject domains to draw from:
+{domains}
+
+Source material tendency:
+{source_pref}
+
+NEVER suggest topics matching:
+{exclusions}
+
+Level range: {levels.get('min', 'intermediate')} to {levels.get('max', 'advanced')}
+Chapter range: {chapters.get('min', 8)}-{chapters.get('max', 20)} chapters per topic
+Tone: {tone}
+
+Each topic should support a {chapters.get('min', 8)}+ chapter textbook with substantive technical depth. Prefer topics where an authoritative source document (RFC, vendor exam blueprint, official documentation) exists and can be linked. If no canonical source exists, set suggested_source_url to null.
+
+Respond with a JSON array of exactly {count} objects (no markdown, no code fences, no extra text):
+[
+  {{
+    "name": "Concise Topic Name (e.g. 'Kubernetes Networking Deep Dive')",
+    "description": "2-3 sentences describing scope, the working engineer this is for, and why it is worth studying now.",
+    "level": "beginner|intermediate|advanced",
+    "chapters": 12,
+    "suggested_source_url": "https://... (or null if none)"
   }}
 ]{history_section}{already_section}"""
