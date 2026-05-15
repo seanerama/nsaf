@@ -19,14 +19,14 @@ Each idea will be built as one of three NSAF project kinds:
 - **studyws** — an interactive learning package on a topic (textbook chapters, study guides, slides, podcast)
 - **app** — a web application that solves a problem (Flask/Next.js/etc., deployed locally)
 
-Your job, given the user's raw idea text:
+Given the user's raw idea text:
 1. Echo back a 1–2 sentence interpretation that captures what you think they're really after.
 2. Classify the best-fit kind (story / studyws / app / unclear).
-3. Draft a vision markdown document the user can refine asynchronously by editing and re-uploading.
+3. Produce a short working title and a vision markdown document the user can refine
+   asynchronously by editing and re-uploading.
 
-The vision doc must follow this exact structure:
+The vision_md document must follow this exact structure:
 
-```
 # <Working Title>
 
 ## Idea
@@ -42,36 +42,58 @@ The vision doc must follow this exact structure:
 - <aspect 1>
 - <aspect 2>
 - <aspect 3>
-- <…>
 
 ## Open Questions
 1. <question that, once answered, would unblock the build>
-2. <…>
-3. <…>
-4. <…>
-5. <…>
+2. <...>
+3. <...>
+4. <...>
+5. <...>
 
 ## Your Answers
 <leave this section blank — the user fills it in before re-uploading>
 
 ## Build Notes
 <any hints, constraints, or stylistic preferences the bot should respect when building>
-```
 
-Respond with ONLY a JSON object — no surrounding prose, no code fences. Schema:
-{
-  "interpretation": "<1–2 sentence echo>",
-  "proposed_kind": "story|studyws|app|unclear",
-  "title": "<short working title>",
-  "vision_md": "<the full markdown doc per the template above>"
-}"""
+Always submit your response by calling the submit_vision tool — do not write
+markdown directly in the message body."""
+
+
+SUBMIT_VISION_TOOL = {
+    "name": "submit_vision",
+    "description": "Submit the expanded interpretation, proposed kind, working title, and full vision markdown document.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "interpretation": {
+                "type": "string",
+                "description": "1-2 sentence echo of what the user is really after.",
+            },
+            "proposed_kind": {
+                "type": "string",
+                "enum": ["story", "studyws", "app", "unclear"],
+                "description": "Best-fit NSAF project kind.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Short working title (used to derive the session slug).",
+            },
+            "vision_md": {
+                "type": "string",
+                "description": "The full vision markdown document following the prescribed structure.",
+            },
+        },
+        "required": ["interpretation", "proposed_kind", "title", "vision_md"],
+    },
+}
 
 
 def expand_idea(raw_text):
     """Call Claude to expand a raw idea into an interpretation + vision doc.
 
-    Returns dict: {interpretation, proposed_kind, title, vision_md} on success,
-    or raises on failure (caller should catch and surface error to user).
+    Returns dict: {interpretation, proposed_kind, title, vision_md}.
+    Uses tool_use for reliable structured output.
     """
     client = Anthropic()
     response = client.messages.create(
@@ -79,18 +101,19 @@ def expand_idea(raw_text):
         max_tokens=4000,
         temperature=0.7,
         system=SYSTEM_PROMPT,
+        tools=[SUBMIT_VISION_TOOL],
+        tool_choice={"type": "tool", "name": "submit_vision"},
         messages=[{"role": "user", "content": raw_text}],
     )
-    text = response.content[0].text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1]
-        text = text.rsplit("```", 1)[0].strip()
-
-    data = json.loads(text)
-    for required in ("interpretation", "proposed_kind", "title", "vision_md"):
-        if required not in data:
-            raise ValueError(f"Claude response missing required field: {required}")
-    return data
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use":
+            data = dict(block.input)
+            for required in ("interpretation", "proposed_kind", "title", "vision_md"):
+                if required not in data:
+                    raise ValueError(f"Tool output missing required field: {required}")
+            return data
+    raise ValueError("Claude did not invoke submit_vision; got: "
+                     f"{getattr(response.content[0], 'text', '')[:200]}")
 
 
 def _md_to_html(md):
