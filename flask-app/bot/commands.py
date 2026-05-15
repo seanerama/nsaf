@@ -356,6 +356,50 @@ def _extract_title(md):
     return m.group(1).strip() if m else None
 
 
+def _extract_section(md, section_name):
+    """Return the body of `## <section_name>` (text up to the next ## heading)."""
+    import re
+    if not md:
+        return None
+    # [ \t]* on the heading line so we don't greedily consume blank lines too.
+    pattern = rf"^##[ \t]+{re.escape(section_name)}[ \t]*\n([\s\S]*?)(?=^##[ \t]+|\Z)"
+    m = re.search(pattern, md, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def _replace_section(md, section_name, new_body):
+    """Replace the body of `## <section_name>`. Append the section if missing."""
+    import re
+    pattern = rf"(^##[ \t]+{re.escape(section_name)}[ \t]*\n)[\s\S]*?(?=^##[ \t]+|\Z)"
+    body = new_body.strip()
+    new_block = lambda m: m.group(1) + body + "\n\n"
+    new_md, n = re.subn(pattern, new_block, md or "", count=1, flags=re.MULTILINE)
+    if n == 0:
+        prefix = (md or "").rstrip("\n")
+        return f"{prefix}\n\n## {section_name}\n{body}\n"
+    return new_md
+
+
+def _parse_numbered_answers(text):
+    """Parse '1. foo\n2. bar baz' into {1: 'foo', 2: 'bar baz'}. Multi-line answers ok."""
+    import re
+    answers = {}
+    current = None
+    buf = []
+    for line in (text or "").splitlines():
+        m = re.match(r"^\s*(\d+)\.\s+(.*)$", line)
+        if m:
+            if current is not None:
+                answers[current] = "\n".join(buf).strip()
+            current = int(m.group(1))
+            buf = [m.group(2)]
+        elif current is not None:
+            buf.append(line)
+    if current is not None:
+        answers[current] = "\n".join(buf).strip()
+    return answers
+
+
 def cmd_vision(arg, attachments=None):
     """Vision-doc commands: show / email / build / list / cancel.
 
@@ -388,6 +432,12 @@ def cmd_vision(arg, attachments=None):
         return _vision_show(rest)
     if sub == "email":
         return _vision_email(rest)
+    if sub == "questions":
+        return _vision_questions(rest)
+    if sub == "answer":
+        return _vision_answer_one(rest, rest2)
+    if sub == "answers":
+        return _vision_answers_bulk(rest, rest2)
     if sub == "build":
         return _vision_build(rest, kind_override=rest2 or None)
     if sub == "cancel":
@@ -401,9 +451,12 @@ def cmd_vision(arg, attachments=None):
     return ("Usage:\n"
             "  `vision list` — list sessions\n"
             "  `vision show <slug>` — show a vision doc\n"
-            "  `vision email <slug>` — email the doc to yourself\n"
-            "  `vision build <slug> [kind]` — build a project from the doc\n"
+            "  `vision questions <slug>` — show just the open questions (mobile-friendly)\n"
+            "  `vision answer <slug> <N> <text>` — answer one question in chat\n"
+            "  `vision answers <slug> <text>` — replace all answers in one shot\n"
+            "  `vision email <slug>` — email the .md for laptop editing\n"
             "  `vision <slug>` (with .md attached) — replace the doc with your edited version\n"
+            "  `vision build <slug> [kind]` — build a project from the doc\n"
             "  `vision cancel <slug>` — drop a session")
 
 
@@ -453,6 +506,74 @@ def _vision_cancel(slug):
         return f"Vision `{slug}` not found."
     vision_update(slug, status="cancelled")
     return f"Vision `{slug}` cancelled."
+
+
+def _vision_questions(slug):
+    """Show just the Open Questions section + which ones are already answered."""
+    if not slug:
+        return "Usage: `vision questions <slug>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    md = session.get("vision_md") or ""
+    questions = _extract_section(md, "Open Questions")
+    if not questions:
+        return f"Vision `{slug}` has no `## Open Questions` section."
+
+    answered = _parse_numbered_answers(_extract_section(md, "Your Answers") or "")
+    lines = [f"**Open Questions for `{slug}`:**", "", questions, ""]
+    if answered:
+        nums = ", ".join(str(n) for n in sorted(answered))
+        lines.append(f"_Answered so far: {nums}_")
+        lines.append("")
+    lines.extend([
+        "Reply with:",
+        f"- `vision answer {slug} <N> <text>` — answer one question",
+        f"- `vision answers {slug} <text>` — replace all answers at once",
+        f"- `vision build {slug}` — build now with whatever you've got",
+    ])
+    return "\n".join(lines)
+
+
+def _vision_answer_one(slug, payload):
+    """Record one numbered answer. payload = '<N> <answer text>'."""
+    if not slug:
+        return "Usage: `vision answer <slug> <N> <answer text>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    parts = (payload or "").split(None, 1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        return ("Usage: `vision answer <slug> <N> <answer text>`\n"
+                "Example: `vision answer podcasttracker 1 episode level — show is too coarse`")
+    qnum = int(parts[0])
+    answer_text = parts[1].strip()
+
+    md = session.get("vision_md") or ""
+    answers = _parse_numbered_answers(_extract_section(md, "Your Answers") or "")
+    answers[qnum] = answer_text
+
+    new_body = "\n".join(f"{n}. {answers[n]}" for n in sorted(answers))
+    new_md = _replace_section(md, "Your Answers", new_body)
+    vision_update(slug, vision_md=new_md, status="received")
+    return (f"Recorded answer {qnum} for `{slug}`. "
+            f"{len(answers)} answered so far.\n"
+            f"`vision questions {slug}` to see what's left, or `vision build {slug}` when ready.")
+
+
+def _vision_answers_bulk(slug, text):
+    """Replace the entire Your Answers section with free-form text."""
+    if not slug:
+        return "Usage: `vision answers <slug> <answer text>`"
+    session = vision_get(slug)
+    if not session:
+        return f"Vision `{slug}` not found."
+    if not text or not text.strip():
+        return "Usage: `vision answers <slug> <answer text>` (provide the full block)"
+    md = session.get("vision_md") or ""
+    new_md = _replace_section(md, "Your Answers", text.strip())
+    vision_update(slug, vision_md=new_md, status="received")
+    return f"Updated Your Answers for `{slug}` ({len(text)} chars). Ready: `vision build {slug}`."
 
 
 def _vision_apply_attachment(session, attachments):
@@ -2940,9 +3061,12 @@ def cmd_help(_arg):
 
 **Vision Sessions** (refine an idea before building)
 - `vision list` — List recent vision sessions
-- `vision show <slug>` — Show a drafted vision doc
-- `vision email <slug>` — Email the .md to you for editing
-- `vision <slug>` (attach edited .md) — Replace the doc with your version
+- `vision show <slug>` — Show the full vision doc
+- `vision questions <slug>` — Show just the open questions (mobile-friendly)
+- `vision answer <slug> <N> <text>` — Answer one question in Webex
+- `vision answers <slug> <text>` — Replace all answers in one shot
+- `vision email <slug>` — Email the .md (better for laptop editing)
+- `vision <slug>` (attach edited .md) — Replace the doc with your edited version
 - `vision build <slug> [story|studyws|app]` — Promote to a real project + queue
 - `vision cancel <slug>` — Drop a session
 
