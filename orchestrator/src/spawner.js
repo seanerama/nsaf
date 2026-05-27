@@ -19,6 +19,18 @@ function getDetectedTools() {
 
 const log = pino({ name: 'nsaf.spawner' });
 
+// Locate a story's finished video. New builds name it `<title-slug>-final.mp4`;
+// older builds used a bare `final.mp4`. Prefer a title-named file, falling back to
+// the legacy name. Returns the absolute path, or null if none exists.
+function findFinalMp4(storyOut) {
+  let files;
+  try { files = readdirSync(storyOut); } catch { return null; }
+  const matches = files.filter(f => f.endsWith('final.mp4'));
+  if (matches.length === 0) return null;
+  const titled = matches.find(f => f !== 'final.mp4');
+  return join(storyOut, titled || 'final.mp4');
+}
+
 const activeSessions = new Map();
 
 export function getActiveSessions() {
@@ -179,7 +191,7 @@ ${pipelineInstructions}`;
 
     // Detect partial output to resume
     const storyOut = join(dir, 'story-output');
-    const hasFinal = existsSync(join(storyOut, 'final.mp4'));
+    const hasFinal = findFinalMp4(storyOut) !== null;
     const hasConcept = existsSync(join(storyOut, 'concept.md'));
     const hasOutline = existsSync(join(storyOut, 'outline.md'));
     const hasScript = existsSync(join(storyOut, 'script.md'));
@@ -211,7 +223,7 @@ Process:
    mv nanobanana-output/*.png story-output/images/scene-<N>.png
    rm -rf nanobanana-output
    \`\`\`
-5. Run /story:build to rebuild story-output/final.mp4 with the corrected image.
+5. Run /story:build to rebuild the final MP4 (story-output/<title>-final.mp4) with the corrected image.
 6. Delete story-output/fix-request.md on success.
 
 Fix-request contents for reference:
@@ -219,11 +231,11 @@ Fix-request contents for reference:
 ${fixContent}
 ---`;
     } else if (hasFinal) {
-      pipelineInstructions = `This story is already complete — final.mp4 exists. Exit immediately.`;
+      pipelineInstructions = `This story is already complete — the final MP4 exists. Exit immediately.`;
     } else if (hasConcept || hasOutline || hasScript || hasImages || hasAudio) {
       log.info({ slug, hasConcept, hasOutline, hasScript, hasImages, hasAudio }, 'Detected partial story — will resume');
       pipelineInstructions = `RESUME: This story was partially built. Run /story:next to pick up where it left off.
-Do NOT re-run earlier stages that are already complete. Complete the pipeline end-to-end to produce story-output/final.mp4.
+Do NOT re-run earlier stages that are already complete. Complete the pipeline end-to-end to produce the final MP4 in story-output/.
 Do NOT stop between stages — each stage must invoke the next automatically.`;
     } else {
       const styleHint = style ? `\nPreferred art style: ${style}` : '';
@@ -233,7 +245,7 @@ Do NOT stop between stages — each stage must invoke the next automatically.`;
 
 The pipeline auto-chains: start → outline → write → illustrate → narrate → build.
 Each stage completes and invokes the next. Do NOT stop between stages.
-Produce a final MP4 at story-output/final.mp4.`;
+Produce the final MP4 in story-output/ (the build stage names it <title>-final.mp4).`;
     }
 
     prompt = `Generate an illustrated audio story autonomously with NO human interaction.
@@ -376,9 +388,9 @@ Now run: /sdd:start --from architect`;
       }
 
     } else if (currentType === 'story') {
-      // Story completion: final.mp4 in story-output/
-      const finalMp4 = join(dir, 'story-output', 'final.mp4');
-      const completed = existsSync(finalMp4);
+      // Story completion: a *final.mp4 in story-output/ (<title>-final.mp4 or legacy final.mp4)
+      const finalMp4 = findFinalMp4(join(dir, 'story-output'));
+      const completed = finalMp4 !== null;
 
       if (completed) {
         projectUpdate(slug, {

@@ -2120,8 +2120,20 @@ def cmd_story(arg):
     return "\n".join(lines)
 
 
+def _find_final_mp4(story_out):
+    """Locate a story's finished video. New builds name it ``<title-slug>-final.mp4``;
+    older builds used a bare ``final.mp4``. Prefer a title-named file, falling back to
+    the legacy name. Returns the path, or None if no finished video exists."""
+    import glob as _glob
+    matches = sorted(_glob.glob(os.path.join(story_out, "*final.mp4")))
+    if not matches:
+        return None
+    titled = [m for m in matches if os.path.basename(m) != "final.mp4"]
+    return (titled or matches)[0]
+
+
 def cmd_fetchstory(arg):
-    """Return the final.mp4 for a completed story project as a Webex attachment."""
+    """Return the finished story video for a project as a Webex attachment."""
     slug = arg.strip()
     if not slug:
         return "Usage: `fetchstory <slug>`"
@@ -2133,19 +2145,21 @@ def cmd_fetchstory(arg):
     if (project.get("project_type") or "app") != "story":
         return f"`{slug}` is not a story project."
 
-    final_mp4 = os.path.join(project["project_dir"], "story-output", "final.mp4")
-    if not os.path.exists(final_mp4):
-        return f"No final.mp4 yet for `{slug}` (status: {project['status']})."
+    story_out = os.path.join(project["project_dir"], "story-output")
+    final_mp4 = _find_final_mp4(story_out)
+    if not final_mp4:
+        return f"No final video yet for `{slug}` (status: {project['status']})."
+    fname = os.path.basename(final_mp4)
 
     # Webex attachment limit is ~100MB
     size = os.path.getsize(final_mp4)
     mb = size / (1024 * 1024)
     if size > 95 * 1024 * 1024:
-        return (f"**{slug}**: final.mp4 is {mb:.1f} MB — too large for Webex attachment.\n"
+        return (f"**{slug}**: {fname} is {mb:.1f} MB — too large for Webex attachment.\n"
                 f"Fetch it from the server: `{final_mp4}`")
 
     return {
-        "text": f"**{slug}** — final.mp4 ({mb:.1f} MB)",
+        "text": f"**{slug}** — {fname} ({mb:.1f} MB)",
         "files": [final_mp4],
     }
 
@@ -2190,16 +2204,17 @@ def cmd_storyfix(arg):
                 f"**Scene:** {scene_n}\n\n"
                 f"**Correction:**\n\n{instruction}\n")
 
-    # Remove the bad image and the old final.mp4 so the rebuild picks fresh
+    # Remove the bad image and any existing final video so the rebuild picks fresh
     try:
         os.remove(scene_png)
     except OSError:
         pass
-    final_mp4 = os.path.join(story_out, "final.mp4")
-    try:
-        os.remove(final_mp4)
-    except OSError:
-        pass
+    import glob as _glob
+    for _mp4 in _glob.glob(os.path.join(story_out, "*final.mp4")):
+        try:
+            os.remove(_mp4)
+        except OSError:
+            pass
 
     # Re-queue the project so the orchestrator spawns a fix-mode Claude session
     import sqlite3
@@ -2222,7 +2237,7 @@ def cmd_storyfix(arg):
     return (f"**Fix queued for `{slug}` scene {scene_n}**\n\n"
             f"**Instruction:** {instruction}\n\n"
             f"The orchestrator will regenerate just scene {scene_n} with nano-banana, "
-            f"rebuild final.mp4, and notify when done. `fetchstory {slug}` to get the updated MP4.")
+            f"rebuild the final video, and notify when done. `fetchstory {slug}` to get the updated MP4.")
 
 
 def cmd_stopall(_arg):

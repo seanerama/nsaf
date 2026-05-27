@@ -1,10 +1,21 @@
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import pino from 'pino';
 import { projectsByStatus, projectUpdate } from './db.js';
 
 const log = pino({ name: 'nsaf.stall' });
+
+// Locate a story's finished video: `<title-slug>-final.mp4` (new) or `final.mp4` (legacy).
+// Prefer a title-named file. Returns the absolute path, or null if none exists.
+function findFinalMp4(storyOut) {
+  let files;
+  try { files = readdirSync(storyOut); } catch { return null; }
+  const matches = files.filter(f => f.endsWith('final.mp4'));
+  if (matches.length === 0) return null;
+  const titled = matches.find(f => f !== 'final.mp4');
+  return join(storyOut, titled || 'final.mp4');
+}
 
 function isClaudeRunningForProject(projectDir) {
   try {
@@ -65,8 +76,8 @@ export function checkStalls(timeoutMinutes) {
       const elapsed = (now - lastChange) / 1000 / 60;
 
       if (elapsed >= timeoutMinutes && !isClaudeRunningForProject(project.project_dir)) {
-        const finalMp4 = join(project.project_dir, 'story-output', 'final.mp4');
-        if (existsSync(finalMp4)) {
+        const finalMp4 = findFinalMp4(join(project.project_dir, 'story-output'));
+        if (finalMp4) {
           projectUpdate(project.slug, {
             status: 'deployed-local',
             deployed_url: finalMp4,
