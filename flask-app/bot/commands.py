@@ -1192,12 +1192,12 @@ _GENERATE_KINDS = {
     "stories": {
         "script": "generate_stories.py",
         "label": "Story idea",
-        "follow_up": "ideas (story listing coming soon)",
+        "follow_up": "`stories`",
     },
     "studies": {
         "script": "generate_studies.py",
         "label": "Study idea",
-        "follow_up": "ideas (study listing coming soon)",
+        "follow_up": "`studies`",
     },
 }
 
