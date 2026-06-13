@@ -1640,7 +1640,7 @@ def cmd_delete(arg):
                 pass
 
         # Remove project directory — but only if it lives under NSAF_PROJECTS_DIR.
-        # A malformed DB row pointing at, say, /home/smahoney must not be wiped.
+        # A malformed DB row pointing at, say, /home/<user> must not be wiped.
         project_dir = project.get("project_dir", "")
         safe_dir = _safe_project_dir(project_dir)
         if project_dir and not safe_dir:
@@ -1790,7 +1790,7 @@ def cmd_demote(slug):
 
     coolify_url = os.environ.get("COOLIFY_API_URL", "")
     coolify_token = os.environ.get("COOLIFY_API_TOKEN", "")
-    domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
+    domain = os.environ.get("NSAF_DOMAIN", "example.com")
 
     import requests as req
 
@@ -2612,7 +2612,7 @@ def _remove_cloudflare_tunnel_route(hostname):
 
 
 def cmd_promote(arg):
-    """Promote: '<slug>' (app→Coolify) or 'study <slug> [--slug X]' (sws→seanmahoney.ai)."""
+    """Promote: '<slug>' (app→Coolify) or 'study <slug> [--slug X]' (sws→NSAF_DOMAIN)."""
     kind, rest = _parse_kind_args(arg)
     if kind == "study":
         return _promote_study(rest)
@@ -2634,7 +2634,7 @@ def cmd_promote(arg):
     project_uuid = os.environ.get("COOLIFY_PROJECT_UUID", "")
     server_uuid = os.environ.get("COOLIFY_SERVER_UUID", "")
     env_name = os.environ.get("COOLIFY_ENVIRONMENT", "production")
-    domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
+    domain = os.environ.get("NSAF_DOMAIN", "example.com")
 
     if not all([coolify_url, coolify_token, project_uuid, server_uuid]):
         return "Coolify not configured."
@@ -2738,9 +2738,10 @@ console.log(result ? 'ok' : 'failed');
             readme_lines.append(f"**Tech Stack:** {app_stack}\n")
 
         readme_lines.append("## Getting Started\n")
+        gh_user = os.environ.get("NSAF_GH_USER", "your-github-user")
         readme_lines.append("```bash")
         readme_lines.append("# Clone and install")
-        readme_lines.append(f"git clone https://github.com/seanerama/{slug}.git")
+        readme_lines.append(f"git clone https://github.com/{gh_user}/{slug}.git")
         readme_lines.append(f"cd {slug}")
         if has_server and has_client:
             client_dir = "client" if os.path.isdir(os.path.join(project_dir, "client")) else "frontend"
@@ -2771,7 +2772,11 @@ console.log(result ? 'ok' : 'failed');
             readme_lines.append(f"{test_summary}\n")
 
         readme_lines.append("---\n")
-        readme_lines.append("*Built by [Nightshift AutoFoundry](https://github.com/seanerama/nsaf)*")
+        nsaf_repo_url = os.environ.get(
+            "NSAF_REPO_URL",
+            "https://github.com/your-github-user/nsaf",
+        )
+        readme_lines.append(f"*Built by [Nightshift AutoFoundry]({nsaf_repo_url})*")
 
         with open(readme_path, "w") as f:
             f.write("\n".join(readme_lines) + "\n")
@@ -2786,9 +2791,10 @@ console.log(result ? 'ok' : 'failed');
         lines.append(f"0.5. README generation failed: {e}")
 
     # Step 1: Push to GitHub
+    gh_user = os.environ.get("NSAF_GH_USER", "your-github-user")
     try:
         result = subprocess.run(
-            ["gh", "repo", "view", f"seanerama/{slug}", "--json", "name"],
+            ["gh", "repo", "view", f"{gh_user}/{slug}", "--json", "name"],
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
@@ -2796,7 +2802,7 @@ console.log(result ? 'ok' : 'failed');
                 ["gh", "repo", "create", slug, "--public", "--source", ".", "--remote", "origin", "--push"],
                 cwd=project_dir, capture_output=True, text=True, timeout=60,
             )
-            lines.append(f"1. GitHub: `seanerama/{slug}` created")
+            lines.append(f"1. GitHub: `{gh_user}/{slug}` created")
         else:
             subprocess.run(["git", "add", "-A"], cwd=project_dir, capture_output=True, timeout=10)
             subprocess.run(
@@ -2807,13 +2813,13 @@ console.log(result ? 'ok' : 'failed');
                 ["git", "push", "-u", "origin", "HEAD"],
                 cwd=project_dir, capture_output=True, text=True, timeout=30,
             )
-            lines.append(f"1. GitHub: `seanerama/{slug}` updated")
+            lines.append(f"1. GitHub: `{gh_user}/{slug}` updated")
     except Exception as e:
         lines.append(f"1. GitHub failed: {e}")
         return "\n".join(lines)
 
     # Step 2: Create app in Coolify
-    repo_url = f"https://github.com/seanerama/{slug}"
+    repo_url = f"https://github.com/{gh_user}/{slug}"
     subdomain_url = f"https://{slug}.{domain}"
 
     try:
@@ -2993,7 +2999,7 @@ def _run_git(repo, *args, check=True, capture=True):
 
 
 def _promote_study(rest):
-    """Deploy an SWS project's output to seanmahoney.ai via the Astro repo."""
+    """Deploy an SWS project's output to NSAF_DOMAIN via the Astro repo."""
     import re
     import shutil
 
@@ -3155,7 +3161,7 @@ def _promote_study(rest):
         return "\n".join(lines)
     lines.append(f"5. Pushed to `origin/main` — Cloudflare Pages will auto-deploy")
 
-    domain = os.environ.get("NSAF_DOMAIN", "seanmahoney.ai")
+    domain = os.environ.get("NSAF_DOMAIN", "example.com")
     lines.append(f"\n**Live in ~60s at:** https://{domain}/study-guides/{web_slug}/chapter-01.html")
     if has_textbook:
         lines.append(f"**Textbook:** https://{domain}/study-guides/{web_slug}/textbook")
@@ -3201,8 +3207,8 @@ def cmd_help(_arg):
 - `vision cancel <slug>` — Drop a session
 
 **Lifecycle**
-- `promote <slug>` — Push to GitHub + deploy via Coolify to *.seanmahoney.ai
-- `promote study <slug> [--slug name]` — Deploy an SWS project to seanmahoney.ai/study-guides/&lt;name&gt;
+- `promote <slug>` — Push to GitHub + deploy via Coolify to `*.${NSAF_DOMAIN}`
+- `promote study <slug> [--slug name]` — Deploy an SWS project to `${NSAF_DOMAIN}/study-guides/&lt;name&gt;`
 - `demote <slug>` — Remove from Coolify, revert to local
 - `archive <slug>` — Stop locally, release ports, keep files
 - `delete <id> [id...]` — Permanently delete projects

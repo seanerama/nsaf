@@ -1,10 +1,23 @@
-# Deploy Study Guide to seanmahoney.ai
+# Deploy Study Guide to an Astro Website
 
 ## Quick Start
 
-**User prompt:** "Deploy the study guide in `<folder-path>` to seanmahoney.ai"
+**User prompt:** "Deploy the study guide in `<folder-path>` to my Astro website"
 
-This workflow takes a folder containing HTML study guides, chapter markdown files, and (optionally) a long-form textbook markdown file, and deploys them all to the seanmahoney.ai website. Each study guide can be paired with a textbook companion that renders at `/study-guides/<slug>/textbook` with mermaid diagram support.
+This workflow takes a folder containing HTML study guides, chapter markdown
+files, and (optionally) a long-form textbook markdown file, and deploys them
+all to an Astro-based website repo. Each study guide can be paired with a
+textbook companion that renders at `/study-guides/<slug>/textbook` with
+mermaid diagram support.
+
+> The example commands assume two shell variables are set:
+>
+> - `$WEBSITE_REPO` — local clone of the Astro website (e.g. `/path/to/website`)
+> - `$WEBSITE_STATE` — optional `website-state.md` file in a private notes repo
+>   that tracks what is currently deployed
+>
+> Replace them with your own paths, or `export` them in your shell so the
+> snippets run as-is.
 
 ---
 
@@ -16,7 +29,7 @@ This workflow takes a folder containing HTML study guides, chapter markdown file
 4. Converts guides to dark mode (CSS variable swap)
 5. Creates a YAML content entry for the Astro content collection
 6. If a textbook is present, copies it into the textbooks content collection with frontmatter so the "Read full textbook →" link appears on the study guide card
-7. Builds, commits, and pushes — Cloudflare Pages auto-deploys
+7. Builds, commits, and pushes — your hosting provider (Cloudflare Pages / Vercel / Netlify / etc.) auto-deploys
 
 ---
 
@@ -50,16 +63,16 @@ find <source-folder> -maxdepth 3 -iname 'textbook.md' -not -name '*Zone*'
 
 ### 2. Choose a Slug
 
-Create a URL-friendly slug for the guide (e.g., `cisco-dcaie`, `kubernetes-ai`, `dgx-spark`). This becomes:
+Create a URL-friendly slug for the guide (e.g., `kubernetes-networking`, `cloud-fundamentals`). This becomes:
 - The directory name: `public/study-guides/<slug>/`
 - The YAML filename: `src/content/studyGuides/<slug>.yaml`
-- The URL path: `seanmahoney.ai/study-guides/<slug>/chapter-XX.html`
+- The URL path: `<your-domain>/study-guides/<slug>/chapter-XX.html`
 
 ### 3. Copy HTML Files
 
 ```bash
-mkdir -p /home/smahoney/projects/seanmahoney/website/public/study-guides/<slug>
-cp <source-folder>/.../guides/chapter-*.html /home/smahoney/projects/seanmahoney/website/public/study-guides/<slug>/
+mkdir -p "$WEBSITE_REPO/public/study-guides/<slug>"
+cp <source-folder>/.../guides/chapter-*.html "$WEBSITE_REPO/public/study-guides/<slug>/"
 ```
 
 ### 4. Convert to Dark Mode
@@ -67,7 +80,7 @@ cp <source-folder>/.../guides/chapter-*.html /home/smahoney/projects/seanmahoney
 Run this sed on every copied HTML file:
 
 ```bash
-cd /home/smahoney/projects/seanmahoney/website/public/study-guides/<slug>
+cd "$WEBSITE_REPO/public/study-guides/<slug>"
 for f in chapter-*.html; do
   sed -i \
     -e 's/--color-bg: #fafafa/--color-bg: #0a0a0f/' \
@@ -96,7 +109,7 @@ done
 Determine the next `order` number by checking existing guides:
 
 ```bash
-grep '^order:' /home/smahoney/projects/seanmahoney/website/src/content/studyGuides/*.yaml | sort -t: -k3 -n | tail -1
+grep '^order:' "$WEBSITE_REPO/src/content/studyGuides/"*.yaml | sort -t: -k3 -n | tail -1
 ```
 
 Create the YAML file at `src/content/studyGuides/<slug>.yaml`:
@@ -129,7 +142,7 @@ src=<source-folder>/textbook.md
 # Pull the H1 as the book title — strip leading '# ' and any trailing whitespace
 title=$(grep -m1 '^# ' "$src" | sed 's/^# //; s/[[:space:]]*$//')
 
-dst=/home/smahoney/projects/seanmahoney/website/src/content/textbooks/${slug}.md
+dst="$WEBSITE_REPO/src/content/textbooks/${slug}.md"
 {
   echo "---"
   echo "title: \"${title}\""
@@ -154,7 +167,7 @@ head -5 "$dst"
 ### 6. Build, Commit, Push
 
 ```bash
-cd /home/smahoney/projects/seanmahoney/website
+cd "$WEBSITE_REPO"
 
 # Verify build passes — use bun, since CI runs bun install --frozen-lockfile + bun run build
 # (Using npm install locally will desync package-lock.json from bun.lock and break CI.)
@@ -164,17 +177,16 @@ bun run build
 # Stage and commit (textbook line is a no-op when there is no textbook for this slug)
 git add public/study-guides/<slug>/ src/content/studyGuides/<slug>.yaml
 git add src/content/textbooks/<slug>.md 2>/dev/null || true
-git commit -m "Add <Guide Title> study guide (<N> chapters, dark mode)
+git commit -m "Add <Guide Title> study guide (<N> chapters, dark mode)"
 
-Co-Authored-By: Claude <model> <noreply@anthropic.com>"
-
-# Push — Cloudflare Pages auto-deploys
+# Push — your hosting provider auto-deploys
 git push
 ```
 
 ### 7. Update State File
 
-After a successful deploy, update `/home/smahoney/seanmahoneyai/website-state.md`:
+After a successful deploy, update the website state file (e.g. `$WEBSITE_STATE`)
+in your private notes repo:
 
 - Add the new guide to the **Current Study Guides** table (or **Current Technical Guides** if applicable)
 - Update the "Last updated" date at the top
@@ -185,15 +197,15 @@ This file is the source of truth for future sessions. If you don't update it, th
 
 ### 8. Verify
 
-The guide should appear at `https://seanmahoney.ai/study-guides` within ~60 seconds of push. If you deployed a textbook:
+The guide should appear at `https://<your-domain>/study-guides` within ~60 seconds of push. If you deployed a textbook:
 
 ```bash
 # Listing page should now have a "Read full textbook" link for this slug
-curl -s https://seanmahoney.ai/study-guides | grep -c "Read full textbook"
+curl -s "https://<your-domain>/study-guides" | grep -c "Read full textbook"
 
 # Textbook page should return 200 and have the book title in the <title> tag
-curl -s -o /dev/null -w "%{http_code}\n" https://seanmahoney.ai/study-guides/<slug>/textbook
-curl -s https://seanmahoney.ai/study-guides/<slug>/textbook | grep -oE '<title>[^<]+</title>'
+curl -s -o /dev/null -w "%{http_code}\n" "https://<your-domain>/study-guides/<slug>/textbook"
+curl -s "https://<your-domain>/study-guides/<slug>/textbook" | grep -oE '<title>[^<]+</title>'
 ```
 
 **Known flaky behavior:** with many large textbook files, the CI build occasionally prerenders only a subset of textbook pages on the first attempt (a content-layer race). If a newly deployed textbook returns the homepage 404 fallback instead of its rendered content, push an empty commit (`git commit --allow-empty -m "chore: redeploy"`) to retrigger the build.
@@ -224,7 +236,7 @@ order: <next-number>
 
 ## Important: State Management
 
-**Every change to the website MUST be followed by updating `website-state.md`.** This file is the handoff document between sessions. Future agents rely on it being accurate. If you add a guide, update a guide, add a page, change navigation, or modify any content collection — update the state file before finishing.
+**Every change to the website MUST be followed by updating the website state file.** This file is the handoff document between sessions. Future agents rely on it being accurate. If you add a guide, update a guide, add a page, change navigation, or modify any content collection — update the state file before finishing.
 
 ---
 

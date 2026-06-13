@@ -60,7 +60,10 @@ def format_ideas_html(ideas, selection_url):
         </table>""")
 
     body = "\n".join(sections)
-    banner_url = "https://raw.githubusercontent.com/seanerama/nsaf/master/nsaf-banner-image.jpg"
+    banner_url = os.environ.get(
+        "NSAF_BANNER_URL",
+        "https://via.placeholder.com/900x200.png?text=Nightshift+AutoFoundry",
+    )
     return f"""
     <html>
     <body style="font-family:sans-serif;max-width:900px;margin:0 auto;padding:20px">

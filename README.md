@@ -13,7 +13,7 @@ A personal content factory that autonomously generates web applications, textboo
 2. **You select** — Browse the ideas in a web UI or via Webex and pick the ones you want built
 3. **NSAF builds** — The orchestrator queues your selections and spawns autonomous Claude Code sessions that build each app through a full spec-driven development pipeline
 4. **You review** — Finished apps are deployed locally with a QA checklist. Approve, modify, or rebuild them through the Webex chatbot
-5. **Promote to production** — Approved apps are deployed via Coolify to `*.seanmahoney.ai` subdomains
+5. **Promote to production** — Approved apps are deployed via Coolify to `*.<your-domain>` subdomains
 
 ### Textbooks & Study Guides (StudyWS Integration)
 1. **You name a topic** — Send `sws <topic>` via Webex, optionally with a source URL (PDF, syllabus, exam blueprint)
@@ -135,7 +135,7 @@ NSAF detects MCP tools configured in your Claude Code environment and automatica
 | **Render** | Deployment | Deploys promoted apps to Render via `mcp__render__*` tools |
 | **PixelLab** | Art Generation | Generates pixel art sprites, characters, tiles, and animations for games |
 | **Leonardo AI** | Art Generation | Generates illustrations, backgrounds, icons, and UI art |
-| **Cloudflare** | Infrastructure | Tunnel routes + DNS for `*.seanmahoney.ai` subdomains |
+| **Cloudflare** | Infrastructure | Tunnel routes + DNS for `*.<your-domain>` subdomains (configured via `NSAF_DOMAIN`) |
 | **GitHub** | Code Hosting | Repository management and PR creation |
 | **Perplexity** | Research | StudyWS uses Perplexity MCP for chapter research |
 
@@ -239,7 +239,7 @@ Control Nightshift AutoFoundry from your phone or desktop through Webex. Works i
 
 | Command | Description |
 |---------|-------------|
-| `promote <slug>` | Push to GitHub + deploy via Coolify to `*.seanmahoney.ai` |
+| `promote <slug>` | Push to GitHub + deploy via Coolify to `*.${NSAF_DOMAIN}` |
 | `demote <slug>` | Remove from Coolify, revert to local-only |
 | `archive <slug>` | Stop running locally, release ports, keep files |
 | `delete <id or slug> [...]` | Permanently delete one or more projects |
@@ -293,7 +293,7 @@ queued → building → deployed-local → reviewing → promoted
 - **building** — Claude Code session running (SDD pipeline for apps, StudyWS for content)
 - **deployed-local** — Build complete. Apps are running on the server. Content is in the output directory.
 - **reviewing** — You're testing it with the QA checklist
-- **promoted** — Deployed via Coolify to `*.seanmahoney.ai`
+- **promoted** — Deployed via Coolify to `*.${NSAF_DOMAIN}`
 - **archived** — Stopped locally, ports released, files preserved
 - **scrapped** — Rejected and cleaned up
 
@@ -304,11 +304,11 @@ When you run `promote <slug>`, NSAF automates the full deployment:
 1. **Dockerfile generated** — Auto-detects project structure (fullstack-split, server-only, static)
 2. **Server patched** — Fixes CORS, adds static file serving, adjusts ports for production
 3. **README generated** — App name, description, live URL, setup instructions
-4. **Pushed to GitHub** — Creates public repo at `seanerama/<slug>`
+4. **Pushed to GitHub** — Creates public repo at `${NSAF_GH_USER}/<slug>`
 5. **Coolify app created** — Connects repo, sets Dockerfile build pack
 6. **Environment variables set** — DATABASE_URL, PORT, NODE_ENV, CORS_ORIGIN
 7. **Build triggered** — Coolify builds Docker image and starts container
-8. **Cloudflare tunnel route added** — `<slug>.seanmahoney.ai` → Traefik (HTTPS, noTLSVerify)
+8. **Cloudflare tunnel route added** — `<slug>.${NSAF_DOMAIN}` → Traefik (HTTPS, noTLSVerify)
 9. **DNS CNAME created** — Points subdomain to tunnel
 
 ## Notifications
@@ -385,4 +385,6 @@ nsaf/
 
 ## License
 
-Private project — not for redistribution.
+Source-available for reference. Personal automation framework — provided
+as-is, with no warranty and no commitment to support. Pull requests welcome
+but not guaranteed to be merged.

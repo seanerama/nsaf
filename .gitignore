@@ -1,16 +1,61 @@
+# --- Workflow / framework output ---
 sdd-output/
-.env
+
+# --- Python ---
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+
+# --- Node ---
 node_modules/
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+infrastructure-credentials.env
+
+# --- Local databases ---
 nsaf.db
 nsaf.db-wal
 nsaf.db-shm
-venv/
-projects/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Logs ---
 *.log
-.pytest_cache/
+logs/
+
+# --- Runtime / generated output ---
+projects/
+output/
+tmp/
+temp/
+
+# --- Backups ---
+*.bak
+*.backup
+*.old
+*.orig
+
+# --- Tool detection output ---
 detected-tools.json
+
+# --- Private architecture / spec drafts (not for public repo) ---
 app-hub-spec.md
 app-factory-architecture.md
-infrastructure-credentials.env
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- WSL Zone.Identifier crud ---
+*:Zone.Identifier

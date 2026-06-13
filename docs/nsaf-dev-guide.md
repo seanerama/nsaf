@@ -4,10 +4,14 @@
 
 ## Access
 
-- **Dev machine:** Local at `/home/smahoney/projects/nsaf`
-- **Production server:** `ssh smahoney@100.110.222.42` (Tailscale) — `/home/smahoney/nsaf`
-- **GitHub:** `https://github.com/seanerama/nsaf` (public, branch: master)
-- **EC2 (Coolify):** `ssh ubuntu@34.207.137.224` — runs Coolify for promoted app deployments
+- **Dev machine:** Local clone at `<path/to/nsaf>` (your laptop or workstation)
+- **Production server:** Ubuntu host reachable over your private network — `<server-host>:<NSAF_HOME>`
+- **GitHub:** The repo this guide ships in (branch: `master`)
+- **Promotion target:** A Coolify host you control (e.g. `coolify.<your-domain>`) used for deploying promoted apps
+
+> The examples below use `$NSAF_HOME` for the install root and `$NSAF_SERVER`
+> for the production server (set `NSAF_SERVER=user@host`). Substitute your own
+> values, or export them in your shell so the commands run as-is.
 
 ## Architecture
 
@@ -30,7 +34,7 @@ Flask App (Python :5000) ←→ SQLite (nsaf.db) ←→ Orchestrator (Node.js)
 |------|----------|-------------|-------------------|
 | `app` | SDD (architect → plan → build → test → deploy) | `/sdd:start --from architect` | STATE.md deployer role complete |
 | `studyws` | StudyWS (scope → research → write → diagrams → guide → slides → podcast) | `/sws:start` | `textbook.md` exists in output dir |
-| `story` | Story Maker (outline → write → illustrate → narrate → build) | `/story:start` | `story-output/final.mp4` exists |
+| `story` | Story Maker (outline → write → illustrate → narrate → build) | `/story:start` | `story-output/<title-slug>-final.mp4` exists |
 
 ## File Map
 
@@ -152,11 +156,14 @@ Also add to `ALLOWED_PROJECT_FIELDS` in `shared/db.py` and schema in `orchestrat
 
 ## Deployment Workflow
 
+> Set `NSAF_SERVER=user@host` and `NSAF_HOME=/path/to/nsaf-on-server` in
+> your shell to use the snippets below as-is.
+
 ### Code change → deploy:
 
 ```bash
 # 1. Make changes locally
-cd /home/smahoney/projects/nsaf
+cd <path/to/local/nsaf>
 
 # 2. Commit and push
 git add <files>
@@ -164,19 +171,19 @@ git commit -m "description"
 git push
 
 # 3. SSH to server and pull
-ssh smahoney@100.110.222.42 "cd ~/nsaf && git pull"
+ssh "$NSAF_SERVER" "cd $NSAF_HOME && git pull"
 
 # 4. Restart affected service(s)
 # For Flask/bot changes:
-ssh smahoney@100.110.222.42 bash <<'EOF'
+ssh "$NSAF_SERVER" bash <<EOF
 pkill -f "flask-app/app.py"; pkill -f ngrok; sleep 3
-cd ~/nsaf && nohup venv/bin/python flask-app/app.py > /tmp/nsaf-flask.log 2>&1 &
+cd $NSAF_HOME && nohup venv/bin/python flask-app/app.py > /tmp/nsaf-flask.log 2>&1 &
 EOF
 
 # For orchestrator changes:
-ssh smahoney@100.110.222.42 bash <<'EOF'
+ssh "$NSAF_SERVER" bash <<EOF
 pkill -f "node orchestrator/src/index.js"; sleep 2
-cd ~/nsaf && nohup node orchestrator/src/index.js > /tmp/nsaf-orch.log 2>&1 &
+cd $NSAF_HOME && nohup node orchestrator/src/index.js > /tmp/nsaf-orch.log 2>&1 &
 EOF
 
 # For idea-generator changes: no restart needed (runs via cron or on-demand)
@@ -184,12 +191,7 @@ EOF
 
 ### DB migration (adding column):
 ```bash
-ssh smahoney@100.110.222.42 "sqlite3 ~/nsaf/nsaf.db 'ALTER TABLE projects ADD COLUMN myfield TEXT DEFAULT \"\";'"
-```
-
-### Quick one-liner deploy:
-```bash
-git push && ssh smahoney@100.110.222.42 "cd ~/nsaf && git pull && pkill -f 'flask-app/app.py'; pkill -f ngrok; pkill -f 'node orchestrator/src/index.js'; sleep 3; cd ~/nsaf; nohup node orchestrator/src/index.js > /tmp/nsaf-orch.log 2>&1 &; nohup venv/bin/python flask-app/app.py > /tmp/nsaf-flask.log 2>&1 &"
+ssh "$NSAF_SERVER" "sqlite3 $NSAF_HOME/nsaf.db 'ALTER TABLE projects ADD COLUMN myfield TEXT DEFAULT \"\";'"
 ```
 
 ## Promote Pipeline (app → production)
@@ -197,12 +199,12 @@ git push && ssh smahoney@100.110.222.42 "cd ~/nsaf && git pull && pkill -f 'flas
 When user sends `promote <slug>` in Webex:
 1. Generate Dockerfile (auto-detect project structure)
 2. Generate README.md
-3. Push to GitHub (`seanerama/<slug>`, public)
+3. Push to GitHub (`${NSAF_GH_USER}/<slug>`, public)
 4. Create Coolify app (Dockerfile build pack)
 5. Set env vars in Coolify (DATABASE_URL, PORT, NODE_ENV, CORS_ORIGIN)
 6. Trigger Coolify deploy
 7. Add Cloudflare Tunnel route (`https://localhost:443` with noTLSVerify → Traefik)
-8. Add Cloudflare DNS CNAME (`<slug>.seanmahoney.ai` → tunnel)
+8. Add Cloudflare DNS CNAME (`<slug>.${NSAF_DOMAIN}` → tunnel)
 9. Update project status to "promoted"
 
 ## External Integrations
@@ -214,7 +216,7 @@ When user sends `promote <slug>` in Webex:
 | Resend | RESEND_API_KEY | Idea generator (morning email) + orchestrator (digest) |
 | Coolify | COOLIFY_API_URL, COOLIFY_API_TOKEN, COOLIFY_PROJECT_UUID, COOLIFY_SERVER_UUID | Promote command |
 | Cloudflare | CF_ACCOUNT_ID, CF_TUNNEL_ID, CF_TUNNEL_TOKEN, CF_DNS_TOKEN, CF_ZONE_ID | Promote/demote commands |
-| GitHub | `gh` CLI auth | Promote + gitpush commands |
+| GitHub | `gh` CLI auth (as `NSAF_GH_USER`) | Promote + gitpush commands |
 | PostgreSQL | POSTGRES_HOST/PORT/USER/PASSWORD | App database provisioning |
 | Perplexity | PERPLEXITY_API_KEY (in MCP config) | StudyWS research stage |
 | OpenAI/Gemini/Anthropic | API keys in .env | Idea generation only (stripped from Claude Code env) |

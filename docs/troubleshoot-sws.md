@@ -4,11 +4,14 @@
 
 ## Access
 
-- **NSAF server:** `ssh smahoney@100.110.222.42` (Tailscale IP)
-- **NSAF directory:** `/home/smahoney/nsaf`
-- **Projects directory:** `/home/smahoney/nsaf/projects/`
-- **SQLite DB:** `/home/smahoney/nsaf/nsaf.db`
-- **GitHub repo:** `https://github.com/seanerama/nsaf`
+> Set `NSAF_SERVER=user@host` and `NSAF_HOME=/path/to/nsaf-on-server` in
+> your shell to use the snippets below as-is.
+
+- **NSAF server:** `$NSAF_SERVER` (reachable over your private network — e.g. Tailscale)
+- **NSAF directory:** `$NSAF_HOME`
+- **Projects directory:** `$NSAF_HOME/projects/`
+- **SQLite DB:** `$NSAF_HOME/nsaf.db`
+- **GitHub repo:** the repo this guide ships in
 
 ## Architecture Overview
 
@@ -65,10 +68,10 @@ output/<topic>/
 tail -20 /tmp/nsaf-flask.log
 
 # 2. Check the project was created in DB
-sqlite3 ~/nsaf/nsaf.db "SELECT slug, status, project_type FROM projects WHERE slug LIKE '%your-topic%';"
+sqlite3 "$NSAF_HOME/nsaf.db" "SELECT slug, status, project_type FROM projects WHERE slug LIKE '%your-topic%';"
 
 # 3. Check the queue
-sqlite3 ~/nsaf/nsaf.db "SELECT p.slug FROM queue q JOIN projects p ON q.project_id = p.id ORDER BY q.position;"
+sqlite3 "$NSAF_HOME/nsaf.db" "SELECT p.slug FROM queue q JOIN projects p ON q.project_id = p.id ORDER BY q.position;"
 
 # 4. Check orchestrator picked it up
 tail -20 /tmp/nsaf-orch.log
@@ -83,23 +86,23 @@ ps aux | grep claude | grep -v grep
 SLUG="sws-your-topic"
 
 # What exists in output?
-find ~/nsaf/projects/$SLUG/output -type f 2>/dev/null | head -20
+find "$NSAF_HOME/projects/$SLUG/output" -type f 2>/dev/null | head -20
 
 # Which stages completed?
-ls ~/nsaf/projects/$SLUG/output/*/research/   # Research done?
-ls ~/nsaf/projects/$SLUG/output/*/chapters/   # Writing done?
-ls ~/nsaf/projects/$SLUG/output/*/textbook.md # Textbook assembled?
-ls ~/nsaf/projects/$SLUG/output/*/guides/     # Guides generated?
-ls ~/nsaf/projects/$SLUG/output/*/slides.md   # Slides done?
-ls ~/nsaf/projects/$SLUG/output/*/podcast-prompt.md # Podcast done?
+ls "$NSAF_HOME/projects/$SLUG/output/"*/research/   # Research done?
+ls "$NSAF_HOME/projects/$SLUG/output/"*/chapters/   # Writing done?
+ls "$NSAF_HOME/projects/$SLUG/output/"*/textbook.md # Textbook assembled?
+ls "$NSAF_HOME/projects/$SLUG/output/"*/guides/     # Guides generated?
+ls "$NSAF_HOME/projects/$SLUG/output/"*/slides.md   # Slides done?
+ls "$NSAF_HOME/projects/$SLUG/output/"*/podcast-prompt.md # Podcast done?
 
 # Check animations in guides
-for g in ~/nsaf/projects/$SLUG/output/*/guides/*.html; do
-  echo "$(basename $g) — SVGs: $(grep -c '<svg' $g), @keyframes: $(grep -c '@keyframes' $g), Replay: $(grep -ci 'replay' $g)"
+for g in "$NSAF_HOME/projects/$SLUG/output/"*/guides/*.html; do
+  echo "$(basename "$g") — SVGs: $(grep -c '<svg' "$g"), @keyframes: $(grep -c '@keyframes' "$g"), Replay: $(grep -ci 'replay' "$g")"
 done
 
 # Build log (may be empty — claude output goes to sub-agents)
-tail -30 ~/nsaf/projects/$SLUG/build.log
+tail -30 "$NSAF_HOME/projects/$SLUG/build.log"
 ```
 
 ## Common Issues
@@ -110,7 +113,7 @@ tail -30 ~/nsaf/projects/$SLUG/build.log
 ps aux | grep claude | grep -v grep | grep "$SLUG"
 
 # Re-queue for resume (spawner detects partial output automatically)
-sqlite3 ~/nsaf/nsaf.db "
+sqlite3 "$NSAF_HOME/nsaf.db" "
 UPDATE projects SET status='queued', stall_alerted=0 WHERE slug='$SLUG';
 DELETE FROM queue WHERE project_id=(SELECT id FROM projects WHERE slug='$SLUG');
 INSERT INTO queue (project_id, position) SELECT id, (SELECT COALESCE(MAX(position),0)+1 FROM queue) FROM projects WHERE slug='$SLUG';
@@ -123,7 +126,7 @@ INSERT INTO queue (project_id, position) SELECT id, (SELECT COALESCE(MAX(positio
 - Verify `config/animation-strategy.md` exists in NSAF root
 
 ### Perplexity research not working
-- Check `PERPLEXITY_API_KEY` is in `~/nsaf/.env`
+- Check `PERPLEXITY_API_KEY` is in `$NSAF_HOME/.env`
 - Check Perplexity MCP is in both `~/.claude.json` AND `~/.claude/settings.json`:
   ```json
   "perplexity-mcp": {
@@ -139,21 +142,21 @@ INSERT INTO queue (project_id, position) SELECT id, (SELECT COALESCE(MAX(positio
 
 ### Pipeline completed but status still "building"
 - Watchdog cron (`restart-apps.sh` every 2 min) checks for completed studyws builds
-- Manual fix: `sqlite3 ~/nsaf/nsaf.db "UPDATE projects SET status='deployed-local', sdd_phase='complete', sdd_progress=100 WHERE slug='$SLUG';"`
+- Manual fix: `sqlite3 "$NSAF_HOME/nsaf.db" "UPDATE projects SET status='deployed-local', sdd_phase='complete', sdd_progress=100 WHERE slug='$SLUG';"`
 
 ## Process Management
 
 ```bash
 # Restart orchestrator
 pkill -f "node orchestrator/src/index.js"; sleep 2
-cd ~/nsaf && nohup node orchestrator/src/index.js > /tmp/nsaf-orch.log 2>&1 &
+cd "$NSAF_HOME" && nohup node orchestrator/src/index.js > /tmp/nsaf-orch.log 2>&1 &
 
 # Restart Flask + ngrok
 pkill -f "flask-app/app.py"; pkill -f ngrok; sleep 3
-cd ~/nsaf && nohup venv/bin/python flask-app/app.py > /tmp/nsaf-flask.log 2>&1 &
+cd "$NSAF_HOME" && nohup venv/bin/python flask-app/app.py > /tmp/nsaf-flask.log 2>&1 &
 
 # Pull latest code
-cd ~/nsaf && git pull
+cd "$NSAF_HOME" && git pull
 
 # Kill all claude sessions (emergency)
 pkill -f "claude.*dangerously"

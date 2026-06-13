@@ -124,9 +124,9 @@ const nodes=[
   {id:'ext-openai',label:'OpenAI',sub:'GPT-4o',layer:'external',x:1400,y:950,file:'api.openai.com',desc:'Idea generation. 4 calls per run at escalating temperatures.',exports:[],imports:[]},
   {id:'ext-gemini',label:'Gemini',sub:'2.5 Flash',layer:'external',x:1400,y:1030,file:'Google AI',desc:'Idea generation. 4 calls per run.',exports:[],imports:[]},
   {id:'ext-anthropic',label:'Anthropic',sub:'Claude Sonnet',layer:'external',x:1400,y:1110,file:'api.anthropic.com',desc:'Idea generation. 4 calls, max temp 1.0.',exports:[],imports:[]},
-  {id:'ext-coolify',label:'Coolify',sub:'Self-Hosted PaaS',layer:'external',x:450,y:1100,file:'coolify.seanmahoney.ai',desc:'App deployment via Docker containers. API for creating apps, setting env vars, triggering builds.',exports:[],imports:[]},
-  {id:'ext-cloudflare',label:'Cloudflare',sub:'Tunnel + DNS',layer:'external',x:650,y:1100,file:'api.cloudflare.com',desc:'Tunnel ingress routes + CNAME DNS records for *.seanmahoney.ai subdomains.',exports:[],imports:[]},
-  {id:'ext-github',label:'GitHub',sub:'Code Hosting',layer:'external',x:850,y:1100,file:'github.com/seanerama',desc:'Public repos for promoted apps. Created via gh CLI on promote.',exports:[],imports:[]},
+  {id:'ext-coolify',label:'Coolify',sub:'Self-Hosted PaaS',layer:'external',x:450,y:1100,file:'coolify.<your-domain>',desc:'App deployment via Docker containers. API for creating apps, setting env vars, triggering builds.',exports:[],imports:[]},
+  {id:'ext-cloudflare',label:'Cloudflare',sub:'Tunnel + DNS',layer:'external',x:650,y:1100,file:'api.cloudflare.com',desc:'Tunnel ingress routes + CNAME DNS records for *.<your-domain> subdomains.',exports:[],imports:[]},
+  {id:'ext-github',label:'GitHub',sub:'Code Hosting',layer:'external',x:850,y:1100,file:'github.com/<your-user>',desc:'Public repos for promoted apps. Created via gh CLI on promote.',exports:[],imports:[]},
   {id:'ext-ngrok',label:'ngrok',sub:'Webhook Tunnel',layer:'external',x:50,y:1000,file:'ngrok',desc:'Tunnels Flask port for Webex webhook callback. Free tier, URL changes on restart.',exports:[],imports:[]},
 
   // Infrastructure
