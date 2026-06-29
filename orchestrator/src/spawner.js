@@ -392,6 +392,13 @@ Now run: /sdd:start --from architect`;
     delete cleanEnv.NANOBANANA_API_KEY;
   }
 
+  // For brief sessions, put $NSAF_BRIEF_HOME/.venv/bin first on PATH so
+  // Claude can find the `notebooklm` CLI installed in the Daily-Brief venv.
+  if (projectType === 'brief' && process.env.NSAF_BRIEF_HOME) {
+    const venvBin = join(process.env.NSAF_BRIEF_HOME, '.venv', 'bin');
+    cleanEnv.PATH = `${venvBin}:${cleanEnv.PATH || ''}`;
+  }
+
   const child = spawn(bin, args, {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
