@@ -195,3 +195,26 @@ def load_study_preferences(path=None):
         "model_profile": sections.get("model profile") or "balanced",
         "daily_quota": _coerce_int(sections.get("daily quota"), 20),
     }
+
+
+
+def load_techguide_preferences(path=None):
+    if path is None:
+        path = os.environ.get("NSAF_TECHGUIDE_PREFERENCES_PATH", "./techguide-preferences.md")
+    sections = _read_sections(path)
+
+    levels = sections.get("levels") or {}
+
+    return {
+        "subject_domains": sections.get("subject domains") or [],
+        "levels": {
+            "min": (levels.get("min") or "intro"),
+            "max": (levels.get("max") or "advanced"),
+        },
+        "source_material_tendency": sections.get("source material tendency") or [],
+        "length_hints": sections.get("length hints") or [],
+        "exclusions": sections.get("exclusions") or [],
+        "tone": sections.get("tone") or [],
+        "model_profile": sections.get("model profile") or "balanced",
+        "on_demand_quota": _coerce_int(sections.get("on-demand quota"), 5),
+    }

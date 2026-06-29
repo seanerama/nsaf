@@ -15,6 +15,7 @@ from shared.db import (
     project_create, get_db,
     story_ideas_for_date, story_idea_get,
     study_ideas_for_date, study_idea_get,
+    techguide_ideas_for_date, techguide_idea_get,
     ensure_project_idea_link_columns,
     vision_insert, vision_get, vision_update, vision_list,
 )
@@ -39,6 +40,7 @@ def handle_command(text, attachments=None):
         "idea": cmd_idea,
         "stories": cmd_stories,
         "studies": cmd_studies,
+        "techguides": cmd_techguides,
         "generate": cmd_generate,
         "queue": cmd_queue_idea,
         "export": cmd_export,
@@ -48,6 +50,7 @@ def handle_command(text, attachments=None):
         "archive": cmd_archive,
         "gitpush": cmd_gitpush,
         "sws": cmd_sws,
+        "tg": cmd_tg,
         "story": cmd_story,
         "fetchstory": cmd_fetchstory,
         "storyfix": cmd_storyfix,
@@ -193,6 +196,8 @@ def _parse_kind_args(arg):
         return "story", parts[1].strip() if len(parts) > 1 else ""
     if head in ("study", "studies"):
         return "study", parts[1].strip() if len(parts) > 1 else ""
+    if head in ("techguide", "techguides", "tg"):
+        return "techguide", parts[1].strip() if len(parts) > 1 else ""
     return "app", arg.strip()
 
 
@@ -280,6 +285,14 @@ def cmd_studies(arg):
     return _list_kind_ideas(
         arg, kind="study", label="study",
         fetch_for_date=study_ideas_for_date, link_col="study_idea_id",
+    )
+
+
+def cmd_techguides(arg):
+    """List today's techguide ideas. Supports: 'techguides', 'techguides 2', 'techguides openai', 'techguides 2026-04-01'."""
+    return _list_kind_ideas(
+        arg, kind="techguide", label="techguide",
+        fetch_for_date=techguide_ideas_for_date, link_col="techguide_idea_id",
     )
 
 
@@ -713,7 +726,7 @@ def _vision_apply_attachment(session, attachments):
 def _vision_build(slug, kind_override=None):
     """Promote a vision session to an actual project."""
     if not slug:
-        return "Usage: `vision build <slug> [story|studyws|app]`"
+        return "Usage: `vision build <slug> [story|studyws|techguide|app]`"
     session = vision_get(slug)
     if not session:
         return f"Vision `{slug}` not found."
@@ -723,9 +736,11 @@ def _vision_build(slug, kind_override=None):
     kind = (kind_override or session.get("proposed_kind") or "unclear").lower()
     if kind == "unclear":
         return (f"Vision `{slug}` doesn't have a clear kind. Specify one:\n"
-                f"`vision build {slug} story` (or `studyws` / `app`)")
-    if kind not in ("story", "studyws", "app"):
-        return f"Unknown kind `{kind}`. Use one of: story / studyws / app."
+                f"`vision build {slug} story` (or `studyws` / `techguide` / `app`)")
+    if kind in ("techguide", "tg"):
+        kind = "techguide"
+    if kind not in ("story", "studyws", "techguide", "app"):
+        return f"Unknown kind `{kind}`. Use one of: story / studyws / techguide / app."
 
     vision_md = session.get("vision_md") or session.get("raw_idea") or ""
     title = _extract_title(vision_md) or slug
@@ -735,6 +750,8 @@ def _vision_build(slug, kind_override=None):
             project_slug = _build_story_from_vision(slug, title, vision_md)
         elif kind == "studyws":
             project_slug = _build_studyws_from_vision(slug, title, vision_md)
+        elif kind == "techguide":
+            project_slug = _build_techguide_from_vision(slug, title, vision_md)
         else:
             project_slug = _build_app_from_vision(slug, title, vision_md)
     except Exception as e:
@@ -812,6 +829,57 @@ def _build_studyws_from_vision(vision_slug, title, vision_md):
     try:
         cursor = db.execute(
             "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'studyws', 'queued')",
+            (project_slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except _sqlite3.IntegrityError as e:
+        raise RuntimeError(f"Project insert failed: {e}")
+    queue_enqueue(pid)
+    return project_slug
+
+
+def _build_techguide_from_vision(vision_slug, title, vision_md):
+    import json as _json
+    import re as _re
+    import sqlite3 as _sqlite3
+    base = _re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "topic"
+    project_slug = f"tg-{base}"
+    if project_get(project_slug):
+        project_slug = f"{project_slug}-{vision_slug[-6:]}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, project_slug)
+    os.makedirs(project_dir, exist_ok=True)
+
+    with open(os.path.join(project_dir, "source-material.md"), "w") as f:
+        f.write(vision_md)
+
+    # Heuristic variant guess from the vision text; the user/skill can override later.
+    lower = (vision_md or "").lower()
+    if any(k in lower for k in ("vs ", "vs.", "compare", "comparison", "versus")):
+        variant = "comparison"
+    elif any(k in lower for k in ("section", "chapter", "step-by-step", "walkthrough")):
+        variant = "deep"
+    else:
+        variant = "explainer"
+
+    config = {
+        "topic": title,
+        "variant": variant,
+        "level": "intermediate",
+        "notes": f"Generated from vision session {vision_slug}",
+        "source_url": "",
+        "products": [],
+        "has_source_file": True,
+    }
+    with open(os.path.join(project_dir, "techguide-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'techguide', 'queued')",
             (project_slug, project_dir),
         )
         db.commit()
@@ -1198,6 +1266,11 @@ _GENERATE_KINDS = {
         "script": "generate_studies.py",
         "label": "Study idea",
         "follow_up": "`studies`",
+    },
+    "techguides": {
+        "script": "generate_techguides.py",
+        "label": "Techguide idea",
+        "follow_up": "`techguides`",
     },
 }
 
@@ -2040,6 +2113,193 @@ def _extract_flag(arg, name):
     return m.group(1).strip(), (arg[:m.start()] + arg[m.end():]).strip()
 
 
+def cmd_tg(arg, attachments=None):
+    """Generate a technical guide for seanmahoney.ai/guides.
+
+    Usage:
+        tg <topic>
+        tg <topic> --variant deep|comparison|explainer
+        tg <topic> --level intro|intermediate|advanced
+        tg <topic> --notes "extra context"
+        tg <topic> --products "Cisco,Versa,Fortinet"   (only meaningful for comparison)
+        tg <topic> --source-url https://...            (also accepts a bare URL anywhere in arg)
+        tg <topic> (with .md or .pdf attached)         (attachment becomes source-material)
+
+    The model picks the variant if you omit --variant. Heuristic:
+      - any of "vs", "vs.", "compare", "versus" in the topic -> comparison
+      - "section", "walkthrough", "step-by-step" -> interactive
+      - otherwise -> explainer
+    """
+    if not arg:
+        return ("Usage: `tg <topic> [options]`\n"
+                "Examples:\n"
+                "- `tg What is SD-WAN`\n"
+                "- `tg Cisco vs Versa SD-WAN --variant comparison --products \"Cisco,Versa,Fortinet\"`\n"
+                "- `tg Kubernetes Service Mesh --variant deep --level advanced`\n"
+                "- `tg https://datatracker.ietf.org/doc/html/rfc9000` (QUIC explainer from RFC)")
+
+    import re
+    import json as _json
+    variant = ""
+    level = "intermediate"
+    notes = ""
+    source_url = ""
+    products = []
+
+    # Extract URL
+    url_match = re.search(r'(https?://\S+)', arg)
+    if url_match:
+        source_url = url_match.group(1)
+        arg = arg[:url_match.start()] + arg[url_match.end():]
+
+    # --variant
+    m = re.search(r'--variant\s+(\w+)', arg)
+    if m:
+        v = m.group(1).lower()
+        if v in ("deep", "comparison", "explainer"):
+            variant = v
+        arg = arg[:m.start()] + arg[m.end():]
+
+    # Shorthand --interactive / --comparison / --explainer
+    for v in ("deep", "comparison", "explainer"):
+        m = re.search(rf'--{v}\b', arg, re.IGNORECASE)
+        if m:
+            variant = v
+            arg = arg[:m.start()] + arg[m.end():]
+            break
+
+    # --level <level>
+    m = re.search(r'--level\s+(\w+)', arg)
+    if m:
+        lv = m.group(1).lower()
+        if lv in ("intro", "beginner", "intermediate", "advanced"):
+            level = "intro" if lv == "beginner" else lv
+        arg = arg[:m.start()] + arg[m.end():]
+
+    for lv in ("intro", "beginner", "intermediate", "advanced"):
+        m = re.search(rf'--{lv}\b', arg, re.IGNORECASE)
+        if m:
+            level = "intro" if lv == "beginner" else lv
+            arg = arg[:m.start()] + arg[m.end():]
+            break
+
+    # --notes "..."
+    m = re.search(r'--notes\s+"([^"]+)"', arg) or re.search(r'--notes\s+(\S+)', arg)
+    if m:
+        notes = m.group(1)
+        arg = arg[:m.start()] + arg[m.end():]
+
+    # --products "A,B,C" or --products A,B,C
+    m = re.search(r'--products\s+"([^"]+)"', arg) or re.search(r'--products\s+(\S+)', arg)
+    if m:
+        products = [p.strip() for p in m.group(1).split(",") if p.strip()]
+        arg = arg[:m.start()] + arg[m.end():]
+
+    # --source-url "..." (alternative to bare URL)
+    m = re.search(r'--source-url\s+(\S+)', arg)
+    if m and not source_url:
+        source_url = m.group(1)
+        arg = arg[:m.start()] + arg[m.end():]
+
+    topic = arg.strip()
+
+    if not topic and source_url:
+        from urllib.parse import urlparse
+        path = urlparse(source_url).path
+        leaf = path.split('/')[-1].replace('.pdf', '').replace('.html', '').replace('_', ' ').replace('-', ' ')
+        topic = leaf if leaf else "Technical Guide"
+
+    if not topic:
+        return "Please provide a topic or URL. Example: `tg What is SD-WAN` or `tg https://datatracker.ietf.org/doc/html/rfc9000`"
+
+    # Heuristic variant if user didn't specify — consider topic AND notes
+    if not variant:
+        haystack = (topic + " " + notes).lower()
+        if any(k in haystack for k in (" vs ", " vs.", "compare", "comparison", "versus")) or products:
+            variant = "comparison"
+        elif any(k in haystack for k in ("section", "step-by-step", "walkthrough", "tutorial")):
+            variant = "deep"
+        else:
+            variant = "explainer"
+
+    # Slug
+    slug = re.sub(r'[^a-z0-9]+', '-', topic.lower()).strip('-')[:60] or "topic"
+    slug = f"tg-{slug}"
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, slug)
+
+    existing = project_get(slug)
+    if existing:
+        return f"Techguide project `{slug}` already exists ({existing['status']}). Use `rebuild {slug}` to regenerate."
+
+    os.makedirs(project_dir, exist_ok=True)
+
+    # Save attachments as source-material (mirrors cmd_sws behavior)
+    has_source_file = False
+    if attachments:
+        for att in attachments:
+            content = att["content"]
+            ct = att.get("content_type", "")
+            if isinstance(content, bytes):
+                if ct.startswith("text/") or ct in ("application/json", "application/xml"):
+                    content = content.decode("utf-8", errors="replace")
+                elif ct == "application/pdf":
+                    pdf_path = os.path.join(project_dir, "source-material.pdf")
+                    with open(pdf_path, "wb") as f:
+                        f.write(content)
+                    has_source_file = True
+                    continue
+                else:
+                    try:
+                        content = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+            with open(os.path.join(project_dir, "source-material.md"), "w") as f:
+                f.write(content)
+            has_source_file = True
+
+    config = {
+        "topic": topic,
+        "variant": variant,
+        "level": level,
+        "notes": notes,
+        "source_url": source_url,
+        "products": products,
+        "has_source_file": has_source_file,
+    }
+    with open(os.path.join(project_dir, "techguide-config.json"), "w") as f:
+        _json.dump(config, f, indent=2)
+
+    import sqlite3
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) VALUES (?, ?, 'techguide', 'queued')",
+            (slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except sqlite3.IntegrityError as e:
+        return f"DB insert failed: {e}"
+    queue_enqueue(pid)
+
+    summary = [
+        f"Queued techguide **`{slug}`**.",
+        f"- Topic: {topic}",
+        f"- Variant: `{variant}`",
+        f"- Level: `{level}`",
+    ]
+    if products:
+        summary.append(f"- Products: {', '.join(products)}")
+    if source_url:
+        summary.append(f"- Source URL: {source_url}")
+    if has_source_file:
+        summary.append("- Source material file attached.")
+    summary.append("Will start when a slot opens. Track with `status`.")
+    return "\n".join(summary)
+
+
 def cmd_story(arg):
     """Generate an illustrated audio story from an idea."""
     if not arg:
@@ -2612,10 +2872,12 @@ def _remove_cloudflare_tunnel_route(hostname):
 
 
 def cmd_promote(arg):
-    """Promote: '<slug>' (app→Coolify) or 'study <slug> [--slug X]' (sws→seanmahoney.ai)."""
+    """Promote: '<slug>' (app→Coolify), 'study <slug>' (sws→seanmahoney.ai), or 'tg <slug>' (techguide→seanmahoney.ai)."""
     kind, rest = _parse_kind_args(arg)
     if kind == "study":
         return _promote_study(rest)
+    if kind == "techguide":
+        return _promote_techguide(rest)
     slug = arg.strip() if arg else ""
     if not slug:
         return "Usage: `promote <slug>` (app) or `promote study <slug>` (study guide)"
@@ -3030,9 +3292,18 @@ def _promote_study(rest):
     chapters_src = os.path.join(sws_out, "chapters")
     textbook_src = os.path.join(sws_out, "textbook.md")
 
-    html_files = sorted(f for f in os.listdir(guides_src) if re.match(r"chapter-\d+\.html$", f))
+    # Accept both bare (chapter-01.html) and descriptive (chapter-01-foundations.html) names.
+    # Sort by leading chapter number so 01, 02, ... 10 come in numeric order.
+    def _chapter_key(name):
+        m = re.match(r"chapter-(\d+)", name)
+        return int(m.group(1)) if m else 9999
+
+    html_files = sorted(
+        (f for f in os.listdir(guides_src) if re.match(r"chapter-\d+(?:-[a-z0-9-]+)?\.html$", f)),
+        key=_chapter_key,
+    )
     if not html_files:
-        return f"No `chapter-NN.html` files found in `{guides_src}`."
+        return f"No `chapter-NN[-name].html` files found in `{guides_src}`."
 
     # Map chapter-NN.html -> chapter-NN.md to extract the chapter title
     chapter_titles = []
@@ -3178,15 +3449,16 @@ def cmd_help(_arg):
 
 **Ideas**
 - `ideas` / `ideas 2` / `ideas openai` — List today's app ideas (paginate / filter by source)
-- `stories` / `studies` — List today's story / study ideas (same paging + filters)
+- `stories` / `studies` / `techguides` — List today's story / study / techguide ideas (same paging + filters)
 - `idea <id>` — Detail for an app idea
-- `idea story <id>` / `idea study <id>` — Detail for a story / study idea
+- `idea story <id>` / `idea study <id>` / `idea tg <id>` — Detail for a story / study / techguide idea
 - `idea <free-form text>` — Brainstorm: Claude expands the idea + drafts a vision doc
 - `queue <id>` — Add an app idea to the build queue
 - `queue story <id>` / `queue study <id>` — Build a story / study from a generated idea
 - `generate` — Trigger new app idea generation
 - `generate stories [N]` — Generate children's story ideas (per-provider count, default 10)
 - `generate studies [N]` — Generate study plan / textbook topic ideas
+- `generate techguides [N]` — Generate technical-guide topic ideas (explainer / comparison / interactive)
 
 **Vision Sessions** (refine an idea before building)
 - `vision list` — List recent vision sessions
@@ -3203,6 +3475,7 @@ def cmd_help(_arg):
 **Lifecycle**
 - `promote <slug>` — Push to GitHub + deploy via Coolify to *.seanmahoney.ai
 - `promote study <slug> [--slug name]` — Deploy an SWS project to seanmahoney.ai/study-guides/&lt;name&gt;
+- `promote tg <slug> [--slug name] [--title "T"] [--description "D"]` — Deploy a techguide to seanmahoney.ai/guides/&lt;name&gt;
 - `demote <slug>` — Remove from Coolify, revert to local
 - `archive <slug>` — Stop locally, release ports, keep files
 - `delete <id> [id...]` — Permanently delete projects
@@ -3215,6 +3488,11 @@ def cmd_help(_arg):
 - `sws <topic>` — Generate a textbook + study guides for a topic
 - `sws <url>` — Generate from a PDF/document (e.g. exam blueprint)
 - `sws <topic> --chapters 12 --level beginner` — With options
+- `tg <topic>` — Generate a technical guide for seanmahoney.ai/guides (variant auto-picked)
+- `tg <topic> --variant deep` — Multi-section deep-dive guide (interactive HTML)
+- `tg <topic> --variant comparison --products "A,B,C"` — Product comparison (sortable matrix)
+- `tg <topic> --variant explainer --level intro --notes "..."` — Single-concept explainer
+- `tg <url>` or attach a .md/.pdf — Generate from source material
 - `story <idea>` — Generate an illustrated audio story (MP4)
 - `story <idea> --title kind-boy` — Set a short slug for the project
 - `story <idea> --scenes 8 --style "watercolor" --notes "..."` — With options
@@ -3233,3 +3511,181 @@ def cmd_help(_arg):
 - `system` — CPU, memory, disk, active sessions
 - `tokens [hours]` — Build activity (default 24h)
 - `help` — Show this message"""
+
+
+def _promote_techguide(rest):
+    """Deploy a techguide project's output/<slug>/guide/ HTML to seanmahoney.ai.
+
+    Implements the recipe from /home/smahoney/seanmahoneyai/deploy-technical-guide.md.
+    Detects single-page vs multi-page-hub layout. Synchronous; mirrors _promote_study.
+    """
+    import os
+    import re
+    import shutil
+    import subprocess
+
+    if not rest:
+        return ("Usage: `promote tg <techguide-slug> [--slug web-slug] [--title \"Title\"] [--description \"desc\"]`\n"
+                "Example: `promote tg tg-what-is-sdwan --slug what-is-sdwan`")
+
+    web_slug_override, rest = _extract_flag(rest, "slug")
+    title_override, rest = _extract_flag(rest, "title")
+    desc_override, rest = _extract_flag(rest, "description")
+    project_slug = rest.strip().split()[0] if rest.strip() else ""
+    if not project_slug:
+        return "Usage: `promote tg <techguide-slug>`"
+
+    project = project_get(project_slug)
+    if not project:
+        return f"Project `{project_slug}` not found."
+    if (project.get("project_type") or "app") != "techguide":
+        return f"`{project_slug}` is project_type `{project.get('project_type')}`, not `techguide`."
+
+    project_dir = project.get("project_dir", "")
+    if not project_dir or not os.path.isdir(project_dir):
+        return f"Project directory for `{project_slug}` not found."
+
+    repo = os.environ.get("NSAF_WEBSITE_REPO", "")
+    bun = os.environ.get("BUN_PATH", "bun")
+    if not repo or not os.path.isdir(repo):
+        return ("`NSAF_WEBSITE_REPO` is not set or directory does not exist. "
+                "Set it in `.env` to the cloned website repo path.")
+
+    # Locate output/<anything>/guide/ — there may be multiple output subdirs but
+    # we expect one with a 'guide' child.
+    out_root = os.path.join(project_dir, "output")
+    guide_src = None
+    if os.path.isdir(out_root):
+        for entry in sorted(os.listdir(out_root)):
+            candidate = os.path.join(out_root, entry, "guide")
+            if os.path.isdir(candidate):
+                guide_src = candidate
+                break
+    if not guide_src:
+        return f"No `output/*/guide/` directory found under `{project_dir}`."
+
+    html_names = sorted(f for f in os.listdir(guide_src) if f.endswith(".html"))
+    if "index.html" not in html_names:
+        return f"`{guide_src}` must contain `index.html` — none found."
+    section_files = sorted(f for f in html_names if re.match(r"section-\d+(?:-[a-z0-9-]+)?\.html$", f))
+    multi_page = len(section_files) > 0
+
+    # Pick web slug
+    web_slug = web_slug_override or re.sub(r"^tg-", "", project_slug)
+    web_slug = re.sub(r"[^a-z0-9]+", "-", web_slug.lower()).strip("-") or project_slug
+
+    # Derive title and description from techguide-config.json if not overridden.
+    cfg_path = os.path.join(project_dir, "techguide-config.json")
+    title = title_override or ""
+    description = desc_override or ""
+    variant = "interactive"
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            title = title or cfg.get("topic") or web_slug
+            description = description or cfg.get("notes") or f"Technical guide on {title}."
+            variant = cfg.get("variant", variant)
+        except Exception:
+            pass
+    if not title:
+        title = web_slug.replace("-", " ").title()
+    if not description:
+        description = f"Technical guide on {title}."
+
+    public_root = os.path.join(repo, "public", "guides")
+    content_root = os.path.join(repo, "src", "content", "guides")
+    os.makedirs(public_root, exist_ok=True)
+    os.makedirs(content_root, exist_ok=True)
+
+    # Verify repo is clean before touching (so a rollback is safe).
+    pre = _run_git(repo, "status", "--porcelain", capture=True)
+    if pre.stdout.strip():
+        return ("Website repo has uncommitted changes — refusing to promote.\n"
+                f"Run `git status` in `{repo}` and commit/stash first.")
+
+    lines = [f"**Promoting techguide `{project_slug}` → `{web_slug}` (variant={variant})**"]
+
+    # Step 1: Copy HTML
+    if multi_page:
+        dst_dir = os.path.join(public_root, web_slug)
+        if os.path.isdir(dst_dir):
+            shutil.rmtree(dst_dir)
+        os.makedirs(dst_dir, exist_ok=True)
+        for f in html_names:
+            shutil.copy(os.path.join(guide_src, f), os.path.join(dst_dir, f))
+        html_field = f"{web_slug}/index.html"
+        lines.append(f"1. Copied {len(html_names)} HTML files → `public/guides/{web_slug}/`")
+    else:
+        dst_file = os.path.join(public_root, f"{web_slug}.html")
+        shutil.copy(os.path.join(guide_src, "index.html"), dst_file)
+        html_field = f"{web_slug}.html"
+        lines.append(f"1. Copied single-page HTML → `public/guides/{web_slug}.html`")
+
+    # Step 2: YAML entry
+    order = 1
+    for fname in os.listdir(content_root):
+        if not fname.endswith(".yaml"):
+            continue
+        try:
+            with open(os.path.join(content_root, fname)) as f:
+                for ln in f:
+                    if ln.startswith("order:"):
+                        try:
+                            order = max(order, int(ln.split(":", 1)[1].strip()) + 1)
+                        except ValueError:
+                            pass
+                        break
+        except Exception:
+            pass
+    yaml_path = os.path.join(content_root, f"{web_slug}.yaml")
+    with open(yaml_path, "w") as f:
+        f.write(f"title: {_yaml_quote(title)}\n")
+        f.write(f"slug: \"{web_slug}\"\n")
+        f.write(f"description: {_yaml_quote(description)}\n")
+        f.write(f'htmlFile: "{html_field}"\n')
+        f.write(f"order: {order}\n")
+    lines.append(f"2. Wrote YAML at order={order}: `{web_slug}.yaml`")
+
+    # Step 3: bun verify build (with rollback on failure)
+    try:
+        result = subprocess.run(
+            [bun, "run", "build"], cwd=repo,
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout).splitlines()[-15:]
+            _run_git(repo, "reset", "--hard", "HEAD", capture=False, check=False)
+            _run_git(repo, "clean", "-fd", capture=False, check=False)
+            lines.append("3. ❌ `bun run build` failed — changes reverted.\n```\n" + "\n".join(tail) + "\n```")
+            return "\n".join(lines)
+    except subprocess.TimeoutExpired:
+        _run_git(repo, "reset", "--hard", "HEAD", capture=False, check=False)
+        _run_git(repo, "clean", "-fd", capture=False, check=False)
+        lines.append("3. ❌ `bun run build` timed out after 5 minutes — changes reverted.")
+        return "\n".join(lines)
+    lines.append("3. `bun run build` ok")
+
+    # Step 4: commit + pull --rebase + push
+    try:
+        _run_git(repo, "add", "-A")
+        _run_git(repo, "commit", "-m", f"Add {title} technical guide")
+    except Exception as e:
+        return "\n".join(lines + [f"4. ❌ git commit failed: {e}"])
+
+    try:
+        _run_git(repo, "pull", "--rebase")
+    except Exception as e:
+        # rebase conflict — restore and report
+        _run_git(repo, "rebase", "--abort", capture=False, check=False)
+        return "\n".join(lines + [f"4. ❌ `git pull --rebase` failed: {e}", "Resolve manually then retry."])
+
+    try:
+        _run_git(repo, "push")
+    except Exception as e:
+        return "\n".join(lines + [f"4. ❌ `git push` failed: {e}"])
+
+    lines.append("4. committed + rebased + pushed")
+    lines.append(f"5. Cloudflare Pages will deploy in ~60s. Verify at https://seanmahoney.ai/guides/{web_slug}")
+    return "\n".join(lines)
+

@@ -252,6 +252,82 @@ Produce the final MP4 in story-output/ (the build stage names it <title>-final.m
 Do NOT ask any questions — make all creative decisions yourself.
 ${pipelineInstructions}`;
 
+  } else if (projectType === 'techguide') {
+    // Technical guide pipeline (interactive / comparison / explainer)
+    let tgConfig = {};
+    try {
+      tgConfig = JSON.parse(readFileSync(join(dir, 'techguide-config.json'), 'utf-8'));
+    } catch { /* no config */ }
+
+    const topic = tgConfig.topic || project.slug;
+    const variant = tgConfig.variant || 'deep';
+    const level = tgConfig.level || 'intermediate';
+    const sourceUrl = tgConfig.source_url || '';
+    const products = Array.isArray(tgConfig.products) ? tgConfig.products : [];
+    const notes = tgConfig.notes || '';
+    const hasSourceFile = !!tgConfig.has_source_file;
+
+    // Source-material injection (mirrors studyws arm)
+    let sourceInstructions = '';
+    const sourceMdPath = join(dir, 'source-material.md');
+    const sourcePdfPath = join(dir, 'source-material.pdf');
+    if (existsSync(sourceMdPath)) {
+      const sourceContent = readFileSync(sourceMdPath, 'utf-8');
+      sourceInstructions = `\nIMPORTANT — Source Material:\nThe following document was provided as the primary source for this technical guide.\nUse it to inform the scope and content. Topic name and outline should be derived from its substance.\n\n--- BEGIN SOURCE MATERIAL ---\n${sourceContent}\n--- END SOURCE MATERIAL ---\n`;
+      log.info({ slug, bytes: sourceContent.length }, 'Injected source-material.md into techguide prompt');
+    } else if (existsSync(sourcePdfPath)) {
+      sourceInstructions = `\nIMPORTANT — Source Material:\nA PDF source document has been saved at: ${sourcePdfPath}\nRead this PDF and use it as the primary source for the guide.\n`;
+      log.info({ slug }, 'Referenced source-material.pdf in techguide prompt');
+    } else if (sourceUrl) {
+      sourceInstructions = `\nIMPORTANT — Source Material:\nBefore running the pipeline, fetch and read: ${sourceUrl}\nUse it as the primary source for the guide.\n`;
+    }
+
+    // Resume detection — output/<slug>/{scope,research,write,diagrams,guide}
+    let resumeFrom = null;
+    const outBase = join(dir, 'output');
+    if (existsSync(outBase)) {
+      try {
+        const subdirs = readdirSync(outBase, { withFileTypes: true }).filter(d => d.isDirectory());
+        if (subdirs.length > 0) {
+          const outDir = join(outBase, subdirs[0].name);
+          const hasScope = existsSync(join(outDir, 'outline.json')) || existsSync(join(outDir, 'scope.md'));
+          const hasResearch = existsSync(join(outDir, 'research')) && readdirSync(join(outDir, 'research')).length > 0;
+          const hasWrite =
+            existsSync(join(outDir, 'explainer.md')) ||
+            (existsSync(join(outDir, 'sections')) && readdirSync(join(outDir, 'sections')).length > 0) ||
+            (existsSync(join(outDir, 'vendors')) && readdirSync(join(outDir, 'vendors')).length > 0);
+          const hasDiagrams = existsSync(join(outDir, 'diagrams')) && readdirSync(join(outDir, 'diagrams')).length > 0;
+          const hasGuide = existsSync(join(outDir, 'guide')) && readdirSync(join(outDir, 'guide')).some(f => f.endsWith('.html'));
+
+          if (hasGuide) resumeFrom = null; // complete (or ready to promote)
+          else if (hasDiagrams) resumeFrom = 'build';
+          else if (hasWrite) resumeFrom = 'diagrams';
+          else if (hasResearch) resumeFrom = 'write';
+          else if (hasScope) resumeFrom = 'research';
+        }
+      } catch { /* ignore */ }
+    }
+
+    const productsLine = (variant === 'comparison' && products.length)
+      ? `\nProducts to compare: ${products.join(', ')}`
+      : '';
+
+    let pipelineInstructions;
+    if (resumeFrom) {
+      const stageMap = {
+        research: '/tg:research — then auto-chain through write → diagrams → build',
+        write: '/tg:write — then auto-chain through diagrams → build',
+        diagrams: '/tg:diagrams — then auto-chain to build',
+        build: '/tg:build',
+      };
+      pipelineInstructions = `RESUME: This techguide was partially built. Some stages already exist.\nDo NOT re-run earlier stages. Start from: ${stageMap[resumeFrom]}\nVariant: ${variant}\nTopic: ${topic}\nLevel: ${level}${productsLine}`;
+      log.info({ slug, resumeFrom }, 'Detected partial techguide output — will resume');
+    } else {
+      pipelineInstructions = `Run /tg:start with topic ${JSON.stringify(topic)}, variant ${JSON.stringify(variant)}, level ${JSON.stringify(level)}.${productsLine}\nThe pipeline auto-chains: start → scope → research → write → diagrams → build.\nEach stage spawns sub-agents for parallel work. Do NOT stop between stages.`;
+    }
+
+    prompt = `Generate a technical guide. NO human interaction — make all decisions autonomously.\nRead ~/.claude/tg/references/techguide-overrides.md FIRST for the variant-specific behavior.\n${sourceInstructions}${pipelineInstructions}`;
+
   } else {
     // Standard app build
     let visionContext = '';

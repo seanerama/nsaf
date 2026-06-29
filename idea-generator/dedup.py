@@ -9,6 +9,7 @@ from shared.db import (
     history_all, history_insert_batch,
     story_history_all, story_history_insert_batch,
     study_history_all, study_history_insert_batch,
+    techguide_history_all, techguide_history_insert_batch,
 )
 
 log = logging.getLogger(__name__)
@@ -65,3 +66,22 @@ def record_study_ideas(ideas, date):
     if items:
         study_history_insert_batch(items)
         log.info(f"Recorded {len(items)} study ideas to history")
+
+
+def get_techguide_history_names():
+    """Past techguide AND study-guide names — cross-kind dedup."""
+    techguide = techguide_history_all()
+    study = study_history_all()
+    names = [item["name"] for item in techguide] + [item["name"] for item in study]
+    log.info(f"Loaded {len(names)} past names for techguide dedup ({len(techguide)} tg + {len(study)} sws)")
+    return names
+
+
+def record_techguide_ideas(ideas, date):
+    items = [
+        {"name": idea["name"], "description": idea["description"], "date": date}
+        for idea in ideas
+    ]
+    if items:
+        techguide_history_insert_batch(items)
+        log.info(f"Recorded {len(items)} techguide ideas to history")

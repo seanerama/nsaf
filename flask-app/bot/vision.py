@@ -17,11 +17,13 @@ Each idea will be built as one of three NSAF project kinds:
 
 - **story** — an illustrated audio story for children (3–6 scenes, narration, images)
 - **studyws** — an interactive learning package on a topic (textbook chapters, study guides, slides, podcast)
+- **techguide** — a self-contained technical guide for seanmahoney.ai/guides: a single-concept explainer, a product comparison, OR a multi-section interactive guide. Pick this for one-off web content, NOT for a multi-chapter learning track.
 - **app** — a web application that solves a problem (Flask/Next.js/etc., deployed locally)
 
 Given the user's raw idea text:
 1. Echo back a 1–2 sentence interpretation that captures what you think they're really after.
-2. Classify the best-fit kind (story / studyws / app / unclear).
+2. Classify the best-fit kind (story / studyws / techguide / app / unclear).
+   Disambiguation: prefer `techguide` for a single self-contained piece of web content (explainer / product comparison / interactive guide). Prefer `studyws` for a multi-chapter learning track or exam prep. Prefer `story` for a children's illustrated audio story. Prefer `app` for a deployable interactive web application.
 3. Produce a short working title and a vision markdown document the user can refine
    asynchronously by editing and re-uploading.
 
@@ -36,7 +38,7 @@ The vision_md document must follow this exact structure:
 <1–2 sentences on the underlying need, audience, or hook>
 
 ## Proposed Kind
-<one of: story | studyws | app>
+<one of: story | studyws | techguide | app>
 
 ## Key Aspects
 - <aspect 1>
@@ -72,7 +74,7 @@ SUBMIT_VISION_TOOL = {
             },
             "proposed_kind": {
                 "type": "string",
-                "enum": ["story", "studyws", "app", "unclear"],
+                "enum": ["story", "studyws", "techguide", "app", "unclear"],
                 "description": "Best-fit NSAF project kind.",
             },
             "title": {

@@ -208,3 +208,69 @@ Respond with a JSON array of exactly {count} objects (no markdown, no code fence
     "suggested_source_url": "https://... (or null if none)"
   }}
 ]{history_section}{already_section}"""
+
+
+def build_techguide_prompt(preferences, history_names, count, already_generated=None):
+    """Build prompt requesting technical-guide topic ideas (interactive / comparison / explainer)."""
+    domains = _format_list(preferences.get("subject_domains", []))
+    source_pref = _format_list(preferences.get("source_material_tendency", []))
+    length_hints = _format_list(preferences.get("length_hints", []))
+    exclusions = _format_list(preferences.get("exclusions", []))
+    tone = ", ".join(preferences.get("tone", [])) or "technical, precise"
+    levels = preferences.get("levels", {"min": "intro", "max": "advanced"})
+
+    history_section = ""
+    if history_names:
+        history_section = (
+            "\n\nDo NOT suggest topics similar to these previously generated ideas "
+            "(includes both techguide and study-guide history — avoid overlap):\n"
+            + "\n".join(f"- {name}" for name in history_names[-100:])
+        )
+
+    already_section = ""
+    if already_generated:
+        already_section = (
+            "\n\nDo NOT suggest topics similar to these (already generated this session):\n"
+            + "\n".join(f"- {name}" for name in already_generated)
+        )
+
+    return f"""Generate exactly {count} unique technical-guide topic ideas. Each must cover a different subject area or angle — not minor variations of one another.
+
+A technical guide is a self-contained piece of web content published to seanmahoney.ai/guides. It is NOT a multi-chapter learning track or exam prep (those are 'studyws' and are out of scope here).
+
+For each topic, choose ONE variant — pick the one that fits the topic best, do not force a mix:
+- **deep** — a multi-section deep-dive HTML guide (5-12 sections)
+- **comparison** — head-to-head product/technology comparison with a feature matrix (list 3-5 products)
+- **explainer** — single-page deep explanation of one concept
+
+Subject domains to draw from:
+{domains}
+
+Source material tendency:
+{source_pref}
+
+Length hints per variant:
+{length_hints}
+
+NEVER suggest topics matching:
+{exclusions}
+
+Level range: {levels.get('min', 'intro')} to {levels.get('max', 'advanced')}
+Tone: {tone}
+
+Respond with a JSON array of exactly {count} objects (no markdown, no code fences, no extra text):
+[
+  {{
+    "name": "Concise Topic Name",
+    "description": "2-3 sentences describing scope, the working engineer this is for, and why it is worth reading.",
+    "variant": "deep|comparison|explainer",
+    "level": "intro|intermediate|advanced",
+    "suggested_source_url": "https://... (or null if none)",
+    "products": ["Product A", "Product B", "Product C"]
+  }}
+]
+
+Notes:
+- "products" array is REQUIRED for variant=comparison (3-5 entries) and MUST be an empty array [] for the other variants.
+- "suggested_source_url" should be a real authoritative document (RFC, vendor whitepaper, official docs) when one exists; otherwise null.
+- Pick variants per topic; do not bias the mix.{history_section}{already_section}"""

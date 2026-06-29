@@ -288,6 +288,8 @@ def ensure_project_idea_link_columns():
         db.execute("ALTER TABLE projects ADD COLUMN story_idea_id INTEGER")
     if "study_idea_id" not in cols:
         db.execute("ALTER TABLE projects ADD COLUMN study_idea_id INTEGER")
+    if "techguide_idea_id" not in cols:
+        db.execute("ALTER TABLE projects ADD COLUMN techguide_idea_id INTEGER")
     db.commit()
 
 
@@ -462,3 +464,91 @@ def config_set(key, value):
         "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value))
     )
     db.commit()
+
+
+# --- Techguide idea operations ---
+
+
+TECHGUIDE_IDEAS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS techguide_ideas (
+    id INTEGER PRIMARY KEY,
+    date TEXT NOT NULL,
+    source TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    variant TEXT NOT NULL,
+    level TEXT,
+    suggested_source_url TEXT,
+    products TEXT,
+    temperature REAL,
+    tier TEXT,
+    selected INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS techguide_idea_history (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    date TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_techguide_ideas_date ON techguide_ideas(date);
+"""
+
+
+def techguide_ideas_init():
+    db = get_db()
+    db.executescript(TECHGUIDE_IDEAS_SCHEMA)
+
+
+def techguide_ideas_insert_batch(ideas):
+    db = get_db()
+    padded = [
+        {
+            "temperature": 0,
+            "tier": "unknown",
+            "level": None,
+            "variant": "interactive",
+            "suggested_source_url": None,
+            "products": None,
+            **idea,
+        }
+        for idea in ideas
+    ]
+    db.executemany(
+        """INSERT INTO techguide_ideas (date, source, rank, name, description, variant,
+               level, suggested_source_url, products, temperature, tier)
+           VALUES (:date, :source, :rank, :name, :description, :variant,
+                   :level, :suggested_source_url, :products, :temperature, :tier)""",
+        padded,
+    )
+    db.commit()
+
+
+def techguide_ideas_for_date(date):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM techguide_ideas WHERE date = ? ORDER BY source, rank", (date,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def techguide_idea_get(id):
+    db = get_db()
+    row = db.execute("SELECT * FROM techguide_ideas WHERE id = ?", (id,)).fetchone()
+    return dict(row) if row else None
+
+
+def techguide_history_insert_batch(items):
+    db = get_db()
+    db.executemany(
+        "INSERT INTO techguide_idea_history (name, description, date) VALUES (:name, :description, :date)",
+        items,
+    )
+    db.commit()
+
+
+def techguide_history_all():
+    db = get_db()
+    rows = db.execute("SELECT * FROM techguide_idea_history ORDER BY date DESC").fetchall()
+    return [dict(r) for r in rows]
