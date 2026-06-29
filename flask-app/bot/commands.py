@@ -52,6 +52,7 @@ def handle_command(text, attachments=None):
         "fetchstory": cmd_fetchstory,
         "storyfix": cmd_storyfix,
         "vision": cmd_vision,
+        "brief": cmd_brief,
         "stopall": cmd_stopall,
         "stop": cmd_stop,
         "start": cmd_start,
@@ -66,7 +67,7 @@ def handle_command(text, attachments=None):
         return f"Unknown command: `{cmd}`. Type `help` for available commands."
 
     # Pass attachments to commands that support them
-    if cmd in ("sws", "vision") and attachments:
+    if cmd in ("sws", "vision", "brief") and attachments:
         return handler(arg, attachments=attachments)
     return handler(arg)
 
@@ -2238,6 +2239,238 @@ def cmd_storyfix(arg):
             f"**Instruction:** {instruction}\n\n"
             f"The orchestrator will regenerate just scene {scene_n} with nano-banana, "
             f"rebuild the final video, and notify when done. `fetchstory {slug}` to get the updated MP4.")
+
+
+# --- Daily-Brief (`brief …`) ----------------------------------------------
+#
+# `brief` drives the Daily-Brief skill package installed at $NSAF_BRIEF_HOME.
+# Each `brief run` / `brief topic` queues an NSAF project (project_type='brief').
+# The orchestrator spawns Claude with cwd=$NSAF_BRIEF_HOME and chains the
+# Daily-Brief slash commands + NotebookLM audio (see orchestrator/src/spawner.js
+# brief branch). Persistent profiles + history live in $NSAF_BRIEF_HOME/data/.
+
+
+def _brief_cli():
+    """Return the `brief` CLI path on this server, or None if NSAF_BRIEF_HOME is unset."""
+    brief_home = os.environ.get("NSAF_BRIEF_HOME", "")
+    if not brief_home:
+        return None
+    venv_cli = os.path.join(brief_home, ".venv", "bin", "brief")
+    if os.path.isfile(venv_cli):
+        return venv_cli
+    return "brief"  # fall back to PATH
+
+
+def _brief_help():
+    return (
+        "**Daily-Brief commands**\n"
+        "- `brief run [profile]` — full sweep, default profile `general`\n"
+        "- `brief topic <topic> [--profile <slug>]` — single-topic research\n"
+        "- `brief setup <slug>` — guided profile creation (coming in Step 5)\n"
+        "- `brief profiles` — list profiles\n"
+        "- `brief status [<slug>]` — overall or per-profile status\n"
+        "- `brief help` — this message"
+    )
+
+
+def _brief_enqueue(mode, profile, topic=""):
+    """Create the per-project brief-config.json + queue the NSAF project row."""
+    import sqlite3
+    import time
+    if not os.environ.get("NSAF_BRIEF_HOME"):
+        return ("`NSAF_BRIEF_HOME` is not set in `.env`. Set it to the Daily-Brief "
+                "install path on this server.")
+
+    ts = time.strftime("%Y-%m-%d-%H%M", time.gmtime())
+    slug = f"brief-{profile}-{ts}"
+    if project_get(slug):
+        return (f"A brief was already queued this minute (`{slug}`). "
+                "Wait a minute and retry.")
+
+    projects_dir = os.environ.get("NSAF_PROJECTS_DIR", "./projects")
+    project_dir = os.path.join(projects_dir, slug)
+    os.makedirs(project_dir, exist_ok=True)
+
+    cfg = {
+        "mode": mode,
+        "profile": profile,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if topic:
+        cfg["topic"] = topic
+    with open(os.path.join(project_dir, "brief-config.json"), "w") as f:
+        json.dump(cfg, f, indent=2)
+
+    db = get_db()
+    try:
+        cursor = db.execute(
+            "INSERT INTO projects (slug, project_dir, project_type, status) "
+            "VALUES (?, ?, 'brief', 'queued')",
+            (slug, project_dir),
+        )
+        db.commit()
+        pid = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return f"Project `{slug}` already exists."
+    queue_enqueue(pid)
+
+    lines = [
+        f"**Brief queued: `{slug}`**",
+        f"**Profile:** {profile}",
+        f"**Mode:** {mode}",
+    ]
+    if topic:
+        lines.append(f"**Topic:** {topic}")
+    lines.append("")
+    lines.append("Will research → render `brief.html` + `summary.md` → "
+                 "generate `podcast.mp3` (NotebookLM, best-effort).")
+    lines.append("Starting when a slot opens.")
+    return "\n".join(lines)
+
+
+def _brief_run(rest):
+    """`brief run [profile]` — queue a full sweep."""
+    import re
+    profile = (rest.strip().split() or ["general"])[0]
+    profile = re.sub(r"[^a-z0-9-]+", "-", profile.lower()).strip("-") or "general"
+    return _brief_enqueue(mode="run", profile=profile)
+
+
+def _brief_topic(rest):
+    """`brief topic <topic> [--profile <slug>]` — queue a single-topic run."""
+    import re
+    if not rest.strip():
+        return ("Usage: `brief topic <topic> [--profile <slug>]`\n"
+                "Example: `brief topic Anthropic Claude releases --profile ai-eng`")
+    profile_override, rest2 = _extract_flag(rest, "profile")
+    profile = profile_override.strip() or "general"
+    profile = re.sub(r"[^a-z0-9-]+", "-", profile.lower()).strip("-") or "general"
+    topic = rest2.strip()
+    if not topic:
+        return "Topic is required. Example: `brief topic \"LLM cost trends\"`"
+    return _brief_enqueue(mode="topic", profile=profile, topic=topic)
+
+
+def _brief_profiles():
+    """`brief profiles` — list known profiles via the Daily-Brief CLI."""
+    cli = _brief_cli()
+    if not cli:
+        return "`NSAF_BRIEF_HOME` is not set in `.env`."
+    brief_home = os.environ.get("NSAF_BRIEF_HOME", "")
+    try:
+        result = subprocess.run(
+            [cli, "profile", "list", "--json"],
+            cwd=brief_home, capture_output=True, text=True, timeout=10, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        msg = (e.stderr or e.stdout or str(e)).strip().splitlines()[-1:] or [""]
+        return f"`brief profile list` failed: {msg[-1]}"
+    except subprocess.TimeoutExpired:
+        return "`brief profile list` timed out."
+    try:
+        profs = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        return f"Could not parse `brief profile list` output: {e}"
+    if not profs:
+        return "No profiles yet. Run `brief setup <slug>` to create one."
+    lines = ["**Daily-Brief profiles:**"]
+    for p in profs:
+        lines.append(f"- `{p.get('slug', '?')}` — {p.get('title', '')}")
+    return "\n".join(lines)
+
+
+def _brief_status(rest):
+    """`brief status [<slug>]` — overall or per-profile status via the CLI."""
+    cli = _brief_cli()
+    if not cli:
+        return "`NSAF_BRIEF_HOME` is not set in `.env`."
+    brief_home = os.environ.get("NSAF_BRIEF_HOME", "")
+    slug = rest.strip().split()[0] if rest.strip() else ""
+
+    cmd = [cli, "profile", "show", slug, "--json"] if slug else [cli, "status", "--json"]
+    try:
+        result = subprocess.run(
+            cmd, cwd=brief_home, capture_output=True, text=True, timeout=10, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        msg = (e.stderr or e.stdout or str(e)).strip().splitlines()[-1:] or [""]
+        return f"`{' '.join(cmd[1:])}` failed: {msg[-1]}"
+    except subprocess.TimeoutExpired:
+        return "`brief` CLI timed out."
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        return f"Could not parse brief output: {e}"
+
+    if slug:
+        title = data.get("title", "?")
+        desc = data.get("description", "")
+        topics = data.get("topics", [])
+        lines = [f"**Profile `{slug}`** — {title}"]
+        if desc:
+            lines.append(f"_{desc}_")
+        lines.append(f"Topics: **{len(topics)}**")
+        for t in topics[:8]:
+            name = t.get("name", "?") if isinstance(t, dict) else str(t)
+            lines.append(f"  - {name}")
+        if len(topics) > 8:
+            lines.append(f"  …and {len(topics) - 8} more")
+        return "\n".join(lines)
+
+    ver = data.get("version", "?")
+    profs = data.get("profiles", [])
+    totals = data.get("totals", {})
+    lines = [
+        f"**Daily-Brief v{ver}**",
+        f"Profiles: **{totals.get('profiles', 0)}** · "
+        f"Runs: **{totals.get('runs', 0)}** · "
+        f"History entries: **{totals.get('history_entries', 0)}**",
+    ]
+    for p in profs[:10]:
+        last = p.get("last_run") or {}
+        if last:
+            stats = last.get("stats", {}) or {}
+            last_str = (f"last {last.get('timestamp', '')} "
+                        f"({stats.get('items_total', 0)} items, "
+                        f"{stats.get('items_new', 0)} new)")
+        else:
+            last_str = "no runs yet"
+        lines.append(f"- `{p.get('slug', '?')}` ({p.get('title', '')}) — "
+                     f"{p.get('topics', 0)} topic(s), {last_str}")
+    if len(profs) > 10:
+        lines.append(f"_…and {len(profs) - 10} more profiles_")
+    return "\n".join(lines)
+
+
+def _brief_setup(rest, attachments=None):
+    """Profile authoring — full Q&A flow lands in Step 5 of the integration plan."""
+    return ("`brief setup` is coming in Step 5 of the integration. For now, "
+            "author profiles on the server by hand: `~/Daily-Brief/data/profiles/<slug>/reference.md` "
+            "(template at `~/Daily-Brief/assets/profile-template.md`).")
+
+
+def cmd_brief(arg, attachments=None):
+    """Daily-Brief: profile-aware news catch-up."""
+    if not arg:
+        return _brief_help()
+    parts = arg.strip().split(maxsplit=1)
+    sub = parts[0].lower()
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if sub == "run":
+        return _brief_run(rest)
+    if sub == "topic":
+        return _brief_topic(rest)
+    if sub in ("profiles", "list"):
+        return _brief_profiles()
+    if sub == "status":
+        return _brief_status(rest)
+    if sub == "setup":
+        return _brief_setup(rest, attachments=attachments)
+    if sub in ("help", "?"):
+        return _brief_help()
+    return f"Unknown `brief` subcommand `{sub}`. Try `brief help`."
 
 
 def cmd_stopall(_arg):
