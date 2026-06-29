@@ -66,6 +66,16 @@ const SCHEMA = `
     value TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS brief_setup_state (
+    slug TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    step TEXT NOT NULL,
+    answers TEXT NOT NULL DEFAULT '{}',
+    current_topic_idx INTEGER DEFAULT 0,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_ideas_date ON ideas(date);
   CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
   CREATE INDEX IF NOT EXISTS idx_queue_position ON queue(position);

@@ -66,7 +66,7 @@ async function processQueue() {
     log.info({ slug, projectType, queueDepth: getQueueDepth(), active: getActiveCount() }, 'Dequeued project');
 
     try {
-      if (projectType === 'studyws' || projectType === 'story') {
+      if (projectType === 'studyws' || projectType === 'story' || projectType === 'brief') {
         // Content-generation pipelines: no ports, no database, no scaffold
         const { mkdirSync } = await import('fs');
         mkdirSync(item.project_dir, { recursive: true });
@@ -105,7 +105,7 @@ async function processQueue() {
 
     } catch (err) {
       log.error({ slug, error: err.message }, 'Failed to launch project');
-      if (projectType === 'studyws' || projectType === 'story') {
+      if (projectType === 'studyws' || projectType === 'story' || projectType === 'brief') {
         projectUpdate(slug, { status: 'queued' });
       } else {
         releasePorts(item.id);
