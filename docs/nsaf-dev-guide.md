@@ -35,6 +35,7 @@ Flask App (Python :5000) ←→ SQLite (nsaf.db) ←→ Orchestrator (Node.js)
 | `app` | SDD (architect → plan → build → test → deploy) | `/sdd:start --from architect` | STATE.md deployer role complete |
 | `studyws` | StudyWS (scope → research → write → diagrams → guide → slides → podcast) | `/sws:start` | `textbook.md` exists in output dir |
 | `story` | Story Maker (outline → write → illustrate → narrate → build) | `/story:start` | `story-output/<title-slug>-final.mp4` exists |
+| `brief` | Daily-Brief (research → render → NotebookLM audio) | `/brief:run` or `/brief:topic` (cwd=`$NSAF_BRIEF_HOME`) | `brief.html` + `summary.md` in `$NSAF_BRIEF_HOME/data/briefs/<slug>/<TS>/` |
 
 ## File Map
 
@@ -218,8 +219,38 @@ When user sends `promote <slug>` in Webex:
 | Cloudflare | CF_ACCOUNT_ID, CF_TUNNEL_ID, CF_TUNNEL_TOKEN, CF_DNS_TOKEN, CF_ZONE_ID | Promote/demote commands |
 | GitHub | `gh` CLI auth (as `NSAF_GH_USER`) | Promote + gitpush commands |
 | PostgreSQL | POSTGRES_HOST/PORT/USER/PASSWORD | App database provisioning |
-| Perplexity | PERPLEXITY_API_KEY (in MCP config) | StudyWS research stage |
+| Perplexity | PERPLEXITY_API_KEY (in MCP config) | StudyWS research stage + Daily-Brief sweeps |
 | OpenAI/Gemini/Anthropic | API keys in .env | Idea generation only (stripped from Claude Code env) |
+| Daily-Brief | `NSAF_BRIEF_HOME` → install path (separate repo) | `brief …` Webex commands; spawner cwd for `project_type='brief'` |
+| NotebookLM | `notebooklm` CLI from `pip install notebooklm-py` in the Daily-Brief venv; Google OAuth via `notebooklm login` | Optional podcast audio for `brief` runs (best-effort; degrades to script-only on failure) |
+
+## Daily-Brief setup
+
+Daily-Brief is a separately-installed Claude Code skill package (see the
+[`brief-integration-plan.md`](brief-integration-plan.md) for the full design).
+One-time install on the NSAF server:
+
+```bash
+# Clone Daily-Brief into its own dir (not under ~/nsaf/)
+cd ~ && git clone <daily-brief-repo> Daily-Brief
+cd Daily-Brief && python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+cp .env.example .env       # set PERPLEXITY_API_KEY here too (or reuse ~/nsaf/.env)
+ln -sfn "$(pwd)/commands/brief" ~/.claude/commands/brief
+brief init                  # creates data/ + the General profile
+
+# NotebookLM (optional — enables podcast.mp3 in brief runs)
+pip install notebooklm-py
+notebooklm skill install    # → ~/.claude/skills/notebooklm/SKILL.md
+notebooklm login            # browser-based Google OAuth — interactive!
+
+# Then in ~/nsaf/.env:
+NSAF_BRIEF_HOME=/home/<user>/Daily-Brief
+```
+
+The orchestrator prepends `$NSAF_BRIEF_HOME/.venv/bin` to PATH for `brief`
+sessions so the `notebooklm` CLI is discoverable. Perplexity MCP must be in
+`~/.claude/settings.json`.
 
 ## Testing
 

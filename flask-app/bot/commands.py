@@ -17,6 +17,7 @@ from shared.db import (
     study_ideas_for_date, study_idea_get,
     ensure_project_idea_link_columns,
     vision_insert, vision_get, vision_update, vision_list,
+    brief_setup_get, brief_setup_upsert, brief_setup_delete,
 )
 
 
@@ -2443,11 +2444,245 @@ def _brief_status(rest):
     return "\n".join(lines)
 
 
+def _brief_render_profile(slug, answers):
+    """Build a Daily-Brief reference.md from collected Q&A answers."""
+    lines = [
+        "---",
+        f"slug: {slug}",
+        f"title: {answers.get('title', slug)}",
+        f"description: {answers.get('description', '')}",
+        "---",
+        "",
+        "## Topics",
+        "",
+    ]
+    for topic in answers.get("topics", []):
+        lines.append(f"### {topic}")
+        lines.append("- web_search: true")
+        for s in answers.get("sources", {}).get(topic, []):
+            lines.append(f"- source: {s}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _extract_fenced_profile(text):
+    """If `text` contains a fenced ```yaml or ```markdown block whose body starts
+    with `---` (profile frontmatter), return the inner body. Otherwise None."""
+    import re
+    m = re.search(r"```(?:yaml|markdown)?\s*\n(.*?)\n?```", text, re.DOTALL)
+    if not m:
+        return None
+    body = m.group(1).strip()
+    return body if body.startswith("---") else None
+
+
+def _brief_setup_question(slug, step, answers, idx):
+    """Render the current question to re-prompt the user."""
+    if step == "title":
+        return (f"What's the **display title** for `{slug}`?\n"
+                f"Reply: `brief setup {slug} <title>`")
+    if step == "description":
+        return (f"What's the **description** (one sentence describing the lens)?\n"
+                f"Reply: `brief setup {slug} <description>`")
+    if step == "topics":
+        return (f"List the **topics**, comma- or newline-separated.\n"
+                f"Reply: `brief setup {slug} <topic1>, <topic2>, ...`")
+    if step == "sources":
+        topic = answers["topics"][idx]
+        return (f"**Sources for `{topic}`** "
+                f"({idx + 1} of {len(answers['topics'])} topics)\n"
+                f"Format: `Name (type) [url]` one per line "
+                f"(types: website, blog, news, web-search, youtube).\n"
+                f"Reply `web-only` to skip per-source for this topic (open-web only), "
+                f"or `skip` for none.\n\n"
+                f"Reply: `brief setup {slug}` followed by your sources.")
+    if step == "confirm":
+        preview = _brief_render_profile(slug, answers)
+        return (f"**Preview:**\n```markdown\n{preview}```\n"
+                f"Reply `brief setup {slug} yes` to write, "
+                f"or `brief setup {slug} cancel` to abort.")
+    return f"Unknown step `{step}`."
+
+
+def _brief_write_profile(slug, body, brief_home):
+    """Write reference.md (raw body) + empty history.md + knowledge-base.md.
+    Validates via the `brief profile show` CLI. Returns (ok, message)."""
+    import shutil
+    profile_dir = os.path.join(brief_home, "data", "profiles", slug)
+    os.makedirs(profile_dir, exist_ok=True)
+    ref_path = os.path.join(profile_dir, "reference.md")
+    with open(ref_path, "w") as f:
+        f.write(body if body.endswith("\n") else body + "\n")
+    for fn in ("history.md", "knowledge-base.md"):
+        p = os.path.join(profile_dir, fn)
+        if not os.path.exists(p):
+            with open(p, "w") as f:
+                f.write("")
+    # Validate via CLI
+    cli = _brief_cli()
+    if not cli:
+        return True, f"Profile `{slug}` written to `{ref_path}` (CLI unavailable — skipped validation)."
+    try:
+        result = subprocess.run(
+            [cli, "profile", "show", slug, "--json"],
+            cwd=brief_home, capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return True, f"Profile `{slug}` written (validation timed out — sanity check on server)."
+    if result.returncode != 0:
+        err = ((result.stderr or result.stdout).strip().splitlines() or [""])[-1]
+        shutil.rmtree(profile_dir, ignore_errors=True)
+        return False, f"Profile validation failed: {err}\n\nNothing written. Fix the YAML and retry."
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        return True, f"Profile `{slug}` written but JSON parse failed: {e}"
+    topic_count = len(data.get("topics", []))
+    return True, (f"**Profile `{slug}` saved** ({topic_count} topic(s) parsed).\n"
+                  f"Run `brief run {slug}` to test it.")
+
+
 def _brief_setup(rest, attachments=None):
-    """Profile authoring — full Q&A flow lands in Step 5 of the integration plan."""
-    return ("`brief setup` is coming in Step 5 of the integration. For now, "
-            "author profiles on the server by hand: `~/Daily-Brief/data/profiles/<slug>/reference.md` "
-            "(template at `~/Daily-Brief/assets/profile-template.md`).")
+    """Guided profile authoring (multi-turn Q&A) + YAML-body shortcut.
+
+    Subcommand grammar:
+      brief setup <slug>                  → start (or re-prompt current step)
+      brief setup <slug> <answer>         → answer the current step
+      brief setup <slug> ```yaml ... ```  → bypass Q&A, write the body directly
+      brief setup <slug> cancel           → discard in-progress state
+      brief setup <slug> yes              → confirm during the final step
+
+    State lives in the brief_setup_state table (one row per slug)."""
+    import re
+    if not rest.strip():
+        return ("Usage:\n"
+                "- `brief setup <slug>` — guided Q&A\n"
+                "- `brief setup <slug>` + fenced ```markdown body — paste a full profile\n"
+                "- `brief setup <slug> cancel` — abort in-progress setup")
+
+    parts = rest.strip().split(maxsplit=1)
+    slug = parts[0].lower()
+    body = parts[1] if len(parts) > 1 else ""
+
+    if not re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
+        return f"Invalid slug `{slug}`. Use lowercase letters, digits, and hyphens."
+
+    brief_home = os.environ.get("NSAF_BRIEF_HOME", "")
+    if not brief_home:
+        return "`NSAF_BRIEF_HOME` is not set in `.env`."
+
+    profile_dir = os.path.join(brief_home, "data", "profiles", slug)
+    body_clean = body.strip()
+
+    # Cancel — wipes any state row.
+    if body_clean.lower() in ("cancel", "abort", "stop"):
+        if brief_setup_get(slug):
+            brief_setup_delete(slug)
+            return f"Brief setup for `{slug}` cancelled."
+        return f"No active setup for `{slug}` to cancel."
+
+    # YAML / markdown shortcut — bypass Q&A, write body verbatim.
+    fenced = _extract_fenced_profile(body) if body else None
+    if fenced:
+        if os.path.isdir(profile_dir):
+            return (f"Profile `{slug}` already exists. Pick another slug or delete it on the server.")
+        ok, msg = _brief_write_profile(slug, fenced, brief_home)
+        if ok and brief_setup_get(slug):
+            brief_setup_delete(slug)
+        return msg
+
+    # Q&A state machine.
+    state = brief_setup_get(slug)
+
+    if not state:
+        if os.path.isdir(profile_dir):
+            return (f"Profile `{slug}` already exists. Pick another slug, or delete the existing one "
+                    f"on the server.")
+        if body_clean:
+            return (f"No setup in progress for `{slug}`. Start with `brief setup {slug}` "
+                    f"(no extra args), or paste a fenced ```markdown profile body.")
+        brief_setup_upsert(slug, "default", "title", {})
+        return (f"**Brief setup started for `{slug}`.**\n\n"
+                f"What's the **display title** for this profile? (e.g. _AI Engineer_, _Realtor_, _Parent_)\n\n"
+                f"Reply: `brief setup {slug} <title>`\n"
+                f"Or paste a fenced ```markdown body to skip the Q&A.\n"
+                f"Or `brief setup {slug} cancel` to abort.")
+
+    answers = json.loads(state["answers"]) if state["answers"] else {}
+    step = state["step"]
+    idx = state["current_topic_idx"] or 0
+
+    if not body_clean:
+        return _brief_setup_question(slug, step, answers, idx)
+
+    if step == "title":
+        answers["title"] = body_clean
+        brief_setup_upsert(slug, "default", "description", answers)
+        return (f"Title: **{body_clean}** ✓\n\n"
+                f"Now the **description** — one sentence describing the role/lens "
+                f"(e.g. _an AI engineer who runs a startup_, _a realtor who farms a neighborhood_).\n\n"
+                f"Reply: `brief setup {slug} <description>`")
+
+    if step == "description":
+        answers["description"] = body_clean
+        brief_setup_upsert(slug, "default", "topics", answers)
+        return (f"Description recorded ✓\n\n"
+                f"Now the **topics** — comma- or newline-separated "
+                f"(e.g. _Anthropic releases, LLM cost trends, MCP ecosystem_).\n\n"
+                f"Reply: `brief setup {slug} <topics>`")
+
+    if step == "topics":
+        topics = []
+        for line in body_clean.replace(",", "\n").splitlines():
+            t = re.sub(r"^[-*0-9.\s]+", "", line).strip()
+            if t:
+                topics.append(t)
+        if not topics:
+            return "No topics parsed. Reply with topics separated by commas or newlines."
+        answers["topics"] = topics
+        answers["sources"] = {t: [] for t in topics}
+        brief_setup_upsert(slug, "default", "sources", answers, current_topic_idx=0)
+        return (f"{len(topics)} topic(s) recorded ✓\n\n"
+                + _brief_setup_question(slug, "sources", answers, 0))
+
+    if step == "sources":
+        topic = answers["topics"][idx]
+        if body_clean.lower() in ("web-only", "web only", "skip", "none", "-"):
+            answers["sources"][topic] = []
+            ack = f"`{topic}`: web-only ✓"
+        else:
+            srcs = []
+            for line in body_clean.splitlines():
+                s = re.sub(r"^[-*0-9.\s]+", "", line).strip()
+                if s:
+                    srcs.append(s)
+            answers["sources"][topic] = srcs
+            ack = f"`{topic}`: {len(srcs)} source(s) ✓"
+
+        next_idx = idx + 1
+        if next_idx < len(answers["topics"]):
+            brief_setup_upsert(slug, "default", "sources", answers, current_topic_idx=next_idx)
+            return f"{ack}\n\n" + _brief_setup_question(slug, "sources", answers, next_idx)
+
+        brief_setup_upsert(slug, "default", "confirm", answers, current_topic_idx=next_idx)
+        return (f"{ack}\n\n"
+                f"**Preview of `{slug}`:**\n"
+                f"```markdown\n{_brief_render_profile(slug, answers)}```\n"
+                f"Reply `brief setup {slug} yes` to write, "
+                f"or `brief setup {slug} cancel` to abort.")
+
+    if step == "confirm":
+        if body_clean.lower() not in ("yes", "y", "ok", "go", "save", "write", "confirm"):
+            return (f"Reply `brief setup {slug} yes` to write, "
+                    f"or `brief setup {slug} cancel` to abort.")
+        body_md = _brief_render_profile(slug, answers)
+        ok, msg = _brief_write_profile(slug, body_md, brief_home)
+        if ok:
+            brief_setup_delete(slug)
+        return msg
+
+    return (f"Setup state for `{slug}` is in an unexpected step: `{step}`. "
+            f"Try `brief setup {slug} cancel`.")
 
 
 def cmd_brief(arg, attachments=None):
@@ -3523,6 +3758,15 @@ def cmd_help(_arg):
 - `story <idea> --scenes 8 --style "watercolor" --notes "..."` — With options
 - `fetchstory <slug>` — Fetch the final MP4 for a completed story
 - `storyfix <slug> <scene-n> <what to fix>` — Regenerate one scene with a targeted correction and rebuild
+
+**Daily-Brief** (profile-aware news catch-up — Perplexity + Claude research + NotebookLM podcast)
+- `brief run [profile]` — Full sweep of a profile's topics (default `general`)
+- `brief topic <topic> [--profile <slug>]` — Single-topic research
+- `brief profiles` — List configured profiles
+- `brief status [<slug>]` — Overall or per-profile status (history, last run)
+- `brief setup <slug>` — Author a new profile via guided Q&A
+- `brief setup <slug>` + fenced ```markdown body — Paste a full profile to skip Q&A
+- `brief help` — Brief-only command summary
 
 **App Control**
 - `stop <slug>` — Stop a running local app

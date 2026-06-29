@@ -371,6 +371,72 @@ def vision_list(limit=20):
     return [dict(r) for r in rows]
 
 
+# --- Brief setup Q&A state ---
+
+BRIEF_SETUP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS brief_setup_state (
+  slug TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL,
+  step TEXT NOT NULL,
+  answers TEXT NOT NULL DEFAULT '{}',
+  current_topic_idx INTEGER DEFAULT 0,
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+"""
+
+
+def brief_setup_init():
+    db = get_db()
+    db.executescript(BRIEF_SETUP_SCHEMA)
+
+
+def brief_setup_get(slug):
+    brief_setup_init()
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM brief_setup_state WHERE slug = ?", (slug,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def brief_setup_upsert(slug, room_id, step, answers, current_topic_idx=0):
+    """Insert or update a brief setup Q&A row. `answers` may be a dict (auto-JSON) or a string."""
+    import json as _json
+    brief_setup_init()
+    db = get_db()
+    answers_json = answers if isinstance(answers, str) else _json.dumps(answers)
+    db.execute(
+        """INSERT INTO brief_setup_state
+             (slug, room_id, step, answers, current_topic_idx, started_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+           ON CONFLICT(slug) DO UPDATE SET
+             room_id = excluded.room_id,
+             step = excluded.step,
+             answers = excluded.answers,
+             current_topic_idx = excluded.current_topic_idx,
+             updated_at = datetime('now')""",
+        (slug, room_id, step, answers_json, current_topic_idx),
+    )
+    db.commit()
+
+
+def brief_setup_delete(slug):
+    brief_setup_init()
+    db = get_db()
+    db.execute("DELETE FROM brief_setup_state WHERE slug = ?", (slug,))
+    db.commit()
+
+
+def brief_setup_list():
+    brief_setup_init()
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM brief_setup_state ORDER BY updated_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # --- Project operations ---
 
 
