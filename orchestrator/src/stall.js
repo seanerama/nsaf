@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'fs';
+import { existsSync, readdirSync, statSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import pino from 'pino';
@@ -63,6 +63,55 @@ export function checkStalls(timeoutMinutes) {
           projectUpdate(project.slug, { stall_alerted: 1 });
           stalled.push(project);
           log.warn({ slug: project.slug, elapsedMinutes: Math.round(elapsed) }, 'StudyWS project stalled');
+        }
+      }
+      continue;
+    }
+
+    // For Brief projects: same pattern — process-check + brief output existence.
+    if (projectType === 'brief') {
+      const lastChange = project.started_at
+        ? new Date(project.started_at).getTime()
+        : now;
+      const elapsed = (now - lastChange) / 1000 / 60;
+
+      if (elapsed >= timeoutMinutes && !isClaudeRunningForProject(project.project_dir)) {
+        let runDir = null;
+        try {
+          const briefHome = process.env.NSAF_BRIEF_HOME;
+          const cfg = JSON.parse(readFileSync(join(project.project_dir, 'brief-config.json'), 'utf-8'));
+          const profile = cfg.profile || 'general';
+          const startedMs = Date.parse(cfg.started_at || project.started_at || 0) || 0;
+          const profileDir = briefHome ? join(briefHome, 'data', 'briefs', profile) : null;
+          if (profileDir && existsSync(profileDir)) {
+            const subdirs = readdirSync(profileDir, { withFileTypes: true })
+              .filter(d => d.isDirectory())
+              .map(d => ({ path: join(profileDir, d.name), mtime: statSync(join(profileDir, d.name)).mtimeMs }))
+              .filter(s => s.mtime >= startedMs - 60_000)
+              .sort((a, b) => b.mtime - a.mtime);
+            for (const s of subdirs) {
+              if (existsSync(join(s.path, 'brief.html')) && existsSync(join(s.path, 'summary.md'))) {
+                runDir = s.path;
+                break;
+              }
+            }
+          }
+        } catch { /* fall through to stalled */ }
+
+        if (runDir) {
+          projectUpdate(project.slug, {
+            status: 'deployed-local',
+            deployed_url: join(runDir, 'brief.html'),
+            brief_run_dir: runDir,
+            sdd_phase: 'complete',
+            sdd_progress: 100,
+            completed_at: new Date().toISOString(),
+          });
+          log.info({ slug: project.slug, runDir }, 'Brief project completed (detected by stall checker)');
+        } else {
+          projectUpdate(project.slug, { stall_alerted: 1 });
+          stalled.push(project);
+          log.warn({ slug: project.slug, elapsedMinutes: Math.round(elapsed) }, 'Brief project stalled');
         }
       }
       continue;

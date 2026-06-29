@@ -40,6 +40,7 @@ const SCHEMA = `
     sdd_progress INTEGER DEFAULT 0,
     deployed_url TEXT,
     render_url TEXT,
+    brief_run_dir TEXT,
     last_state_change TEXT,
     stall_alerted INTEGER DEFAULT 0,
     started_at TEXT,

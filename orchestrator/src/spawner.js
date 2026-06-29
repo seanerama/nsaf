@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { createWriteStream, readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
+import { createWriteStream, readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import pino from 'pino';
 import { projectUpdate, projectGet } from './db.js';
@@ -31,6 +31,35 @@ function findFinalMp4(storyOut) {
   return join(storyOut, titled || 'final.mp4');
 }
 
+// Find the brief run dir produced after a /brief:run started at `startedAt`.
+// Returns the directory path if brief.html and summary.md exist, else null.
+// `podcast.mp3` is best-effort and NOT required for completion (per plan §Risks).
+function findCompletedBrief(briefHome, profile, startedAt) {
+  const profileDir = join(briefHome, 'data', 'briefs', profile);
+  if (!existsSync(profileDir)) return null;
+  const startedMs = Date.parse(startedAt) || 0;
+  const slack = 60_000; // allow 1 min skew between Webex-side stamp and FS mtime
+  let candidates;
+  try {
+    candidates = readdirSync(profileDir, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => {
+        const p = join(profileDir, d.name);
+        let mtime = 0;
+        try { mtime = statSync(p).mtimeMs; } catch {}
+        return { path: p, mtime };
+      })
+      .filter(c => c.mtime >= startedMs - slack)
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch { return null; }
+  for (const c of candidates) {
+    if (existsSync(join(c.path, 'brief.html')) && existsSync(join(c.path, 'summary.md'))) {
+      return c.path;
+    }
+  }
+  return null;
+}
+
 const activeSessions = new Map();
 
 export function getActiveSessions() {
@@ -43,6 +72,10 @@ export function spawnSession(project, claudeCommandTemplate) {
 
   const projectType = project.project_type || 'app';
   let prompt;
+  // Most project types spawn in their own project dir. `brief` is an exception —
+  // it spawns in $NSAF_BRIEF_HOME so the Daily-Brief slash commands and shared
+  // `data/` (profiles, history, briefs) are visible to Claude.
+  let cwd = dir;
 
   if (projectType === 'studyws') {
     // StudyWS content generation
@@ -252,6 +285,51 @@ Produce the final MP4 in story-output/ (the build stage names it <title>-final.m
 Do NOT ask any questions — make all creative decisions yourself.
 ${pipelineInstructions}`;
 
+  } else if (projectType === 'brief') {
+    // Daily-Brief news catch-up pipeline — runs inside a shared Daily-Brief install.
+    const briefHome = process.env.NSAF_BRIEF_HOME;
+    if (!briefHome || !existsSync(briefHome)) {
+      log.error({ slug, briefHome }, 'NSAF_BRIEF_HOME not set or directory missing — cannot spawn brief');
+      projectUpdate(slug, {
+        status: 'failed',
+        last_state_change: new Date().toISOString(),
+      });
+      return null;
+    }
+    let briefCfg = {};
+    try {
+      briefCfg = JSON.parse(readFileSync(join(dir, 'brief-config.json'), 'utf-8'));
+    } catch (err) {
+      log.error({ slug, error: err.message }, 'brief-config.json missing or invalid');
+      projectUpdate(slug, { status: 'failed', last_state_change: new Date().toISOString() });
+      return null;
+    }
+    const profile = briefCfg.profile || 'general';
+    const mode = briefCfg.mode || 'run';
+    const invocation = mode === 'topic'
+      ? `/brief:topic "${(briefCfg.topic || '').replace(/"/g, '\\"')}" ${profile}`
+      : `/brief:run ${profile}`;
+
+    prompt = `Generate a daily brief autonomously with NO human interaction.
+Do NOT ask any questions — proceed with defaults for everything.
+
+Step 1: ${invocation}
+
+Step 2: After the brief completes successfully, locate the newest dated
+directory under data/briefs/${profile}/ — call it RUN_DIR. It contains
+brief.html, summary.md, podcast-script.md, run.json.
+
+Step 3: Use the notebooklm skill to generate a 5-7 minute two-host
+explainer podcast from RUN_DIR/summary.md. Tone: warm and conversational;
+assume the listener is busy. Save the resulting MP3 as RUN_DIR/podcast.mp3.
+If NotebookLM fails for any reason, log the failure and continue — audio
+is best-effort; brief.html and summary.md are the primary deliverables.
+
+Step 4: Verify brief.html and summary.md exist in RUN_DIR (podcast.mp3
+is optional). Print the RUN_DIR path. Then exit.`;
+
+    cwd = briefHome;
+
   } else {
     // Standard app build
     let visionContext = '';
@@ -285,7 +363,7 @@ Now run: /sdd:start --from architect`;
   const args = ['-p', prompt, '--dangerously-skip-permissions'];
 
   const command = `${bin} -p "${prompt}" --dangerously-skip-permissions`;
-  log.info({ slug, command, cwd: dir }, 'Spawning Claude Code session');
+  log.info({ slug, command, cwd }, 'Spawning Claude Code session');
 
   const logPath = join(dir, 'build.log');
   const logStream = createWriteStream(logPath, { flags: 'a' });
@@ -305,7 +383,8 @@ Now run: /sdd:start --from architect`;
   delete cleanEnv.WEBEX_OWNER_PERSON_ID;
   delete cleanEnv.RESEND_API_KEY;
   delete cleanEnv.NGROK_AUTHTOKEN;
-  if (projectType !== 'story') {
+  // Brief sessions may need Google/OpenAI keys for NotebookLM audio generation.
+  if (projectType !== 'story' && projectType !== 'brief') {
     delete cleanEnv.OPENAI_API_KEY;
     delete cleanEnv.GOOGLE_API_KEY;
     delete cleanEnv.GEMINI_API_KEY;
@@ -313,7 +392,7 @@ Now run: /sdd:start --from architect`;
   }
 
   const child = spawn(bin, args, {
-    cwd: dir,
+    cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: cleanEnv,
   });
@@ -404,6 +483,38 @@ Now run: /sdd:start --from architect`;
         log.info({ slug, finalMp4 }, 'Story pipeline complete');
       } else {
         log.warn({ slug, code }, 'Story session exited without producing final.mp4');
+      }
+
+    } else if (currentType === 'brief') {
+      // Brief completion: a dated subdir under $NSAF_BRIEF_HOME/data/briefs/<profile>/
+      // with brief.html + summary.md (podcast.mp3 is best-effort).
+      const briefHome = process.env.NSAF_BRIEF_HOME;
+      let runDir = null;
+      try {
+        const briefCfg = JSON.parse(readFileSync(join(dir, 'brief-config.json'), 'utf-8'));
+        const profile = briefCfg.profile || 'general';
+        const startedAt = briefCfg.started_at || project.started_at || new Date().toISOString();
+        if (briefHome) {
+          runDir = findCompletedBrief(briefHome, profile, startedAt);
+        }
+      } catch (err) {
+        log.warn({ slug, error: err.message }, 'Could not read brief-config.json on completion');
+      }
+
+      if (runDir) {
+        const hasAudio = existsSync(join(runDir, 'podcast.mp3'));
+        projectUpdate(slug, {
+          status: 'deployed-local',
+          deployed_url: join(runDir, 'brief.html'),
+          brief_run_dir: runDir,
+          completed_at: new Date().toISOString(),
+          last_state_change: new Date().toISOString(),
+          sdd_phase: 'complete',
+          sdd_progress: 100,
+        });
+        log.info({ slug, runDir, hasAudio }, 'Brief pipeline complete');
+      } else {
+        log.warn({ slug, code }, 'Brief session exited without producing brief.html + summary.md');
       }
 
     } else {

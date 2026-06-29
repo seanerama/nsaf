@@ -387,7 +387,8 @@ def project_create(slug, idea_id, project_dir):
 ALLOWED_PROJECT_FIELDS = frozenset({
     "status", "project_type", "port_start", "port_end", "db_name", "sdd_phase",
     "sdd_active_role", "sdd_progress", "deployed_url", "render_url",
-    "last_state_change", "stall_alerted", "started_at", "completed_at",
+    "brief_run_dir", "last_state_change", "stall_alerted", "started_at",
+    "completed_at",
 })
 
 
