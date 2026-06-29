@@ -4,6 +4,7 @@ import { join } from 'path';
 import pino from 'pino';
 import { projectUpdate, projectGet } from './db.js';
 import { launchApp } from './app-launcher.js';
+import { notifyBriefCompletion } from './notify.js';
 
 let _detectedTools = null;
 function getDetectedTools() {
@@ -513,6 +514,12 @@ Now run: /sdd:start --from architect`;
           sdd_progress: 100,
         });
         log.info({ slug, runDir, hasAudio }, 'Brief pipeline complete');
+        // Fire-and-forget Webex notification with attachments.
+        const finalProject = projectGet(slug) || project;
+        notifyBriefCompletion(
+          finalProject, runDir,
+          process.env.WEBEX_BOT_TOKEN, process.env.WEBEX_OWNER_PERSON_ID,
+        ).catch(err => log.warn({ slug, error: err.message }, 'Brief Webex notify failed'));
       } else {
         log.warn({ slug, code }, 'Brief session exited without producing brief.html + summary.md');
       }

@@ -2,7 +2,8 @@ import { existsSync, readdirSync, statSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import pino from 'pino';
-import { projectsByStatus, projectUpdate } from './db.js';
+import { projectsByStatus, projectUpdate, projectGet } from './db.js';
+import { notifyBriefCompletion } from './notify.js';
 
 const log = pino({ name: 'nsaf.stall' });
 
@@ -108,6 +109,11 @@ export function checkStalls(timeoutMinutes) {
             completed_at: new Date().toISOString(),
           });
           log.info({ slug: project.slug, runDir }, 'Brief project completed (detected by stall checker)');
+          const finalProject = projectGet(project.slug) || project;
+          notifyBriefCompletion(
+            finalProject, runDir,
+            process.env.WEBEX_BOT_TOKEN, process.env.WEBEX_OWNER_PERSON_ID,
+          ).catch(err => log.warn({ slug: project.slug, error: err.message }, 'Brief Webex notify failed'));
         } else {
           projectUpdate(project.slug, { stall_alerted: 1 });
           stalled.push(project);
