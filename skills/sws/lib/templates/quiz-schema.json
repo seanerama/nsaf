@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SWS Quiz Question",
+  "description": "Schema for quiz questions in SWS study guides",
+  "type": "object",
+  "required": ["id", "question", "options", "correct", "explanation", "wrong_explanations"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique question identifier (e.g., 'q1', 'q2')"
+    },
+    "question": {
+      "type": "string",
+      "description": "The question text"
+    },
+    "options": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "Exactly 4 multiple-choice options"
+    },
+    "correct": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "0-indexed position of the correct answer"
+    },
+    "explanation": {
+      "type": "string",
+      "description": "Why the correct answer is correct"
+    },
+    "wrong_explanations": {
+      "type": "object",
+      "description": "Map of option index to explanation of why it is wrong",
+      "patternProperties": {
+        "^[0-3]$": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "id": "q1",
+      "question": "What is the primary purpose of a load balancer?",
+      "options": [
+        "To encrypt network traffic",
+        "To distribute incoming requests across multiple servers",
+        "To store cached copies of web pages",
+        "To translate domain names to IP addresses"
+      ],
+      "correct": 1,
+      "explanation": "A load balancer distributes incoming network traffic across multiple backend servers to ensure no single server bears too much demand.",
+      "wrong_explanations": {
+        "0": "Encryption is handled by TLS/SSL, not load balancers (though some can terminate TLS).",
+        "2": "Caching is handled by CDNs or caching proxies, not load balancers.",
+        "3": "Domain name translation is handled by DNS, not load balancers."
+      }
+    }
+  ]
+}

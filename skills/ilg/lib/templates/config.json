@@ -1,0 +1,12 @@
+{
+  "workflow": {
+    "quiz_depth": 5,
+    "focus_topic": null,
+    "difficulty_bias": null,
+    "chapter_scope": null
+  },
+  "output": {
+    "graph_library": "cytoscape",
+    "dark_mode_default": false
+  }
+}

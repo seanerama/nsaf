@@ -1,0 +1,63 @@
+{
+  "book": {
+    "title": "",
+    "author": "",
+    "totalChapters": 0,
+    "purpose": ""
+  },
+  "chapters": [
+    {
+      "number": 1,
+      "title": "",
+      "summary": ""
+    }
+  ],
+  "concepts": [
+    {
+      "id": "c1-001",
+      "name": "",
+      "chapter": 1,
+      "definition": "",
+      "importance": "foundational | supporting | advanced",
+      "relatedConcepts": []
+    }
+  ],
+  "relationships": [
+    {
+      "from": "c1-001",
+      "to": "c1-002",
+      "type": "builds-on | contrasts-with | example-of | part-of | enables",
+      "description": ""
+    }
+  ],
+  "quizQuestions": [
+    {
+      "id": "q1-001",
+      "chapter": 1,
+      "difficulty": "foundational | intermediate | advanced",
+      "type": "multiple-choice | true-false | scenario | fill-blank",
+      "question": "",
+      "options": ["", "", "", ""],
+      "correctAnswer": 0,
+      "explanation": "",
+      "whyWrongAnswers": {
+        "1": "",
+        "2": "",
+        "3": ""
+      },
+      "sourceReference": "Chapter 1, p. XX or section name",
+      "relatedConcepts": ["c1-001"]
+    }
+  ],
+  "glossaryTerms": [
+    {
+      "id": "t1-001",
+      "term": "",
+      "chapter": 1,
+      "definition": "",
+      "authorUsage": "",
+      "relatedTerms": [],
+      "example": ""
+    }
+  ]
+}
