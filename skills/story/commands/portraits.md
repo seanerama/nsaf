@@ -51,11 +51,23 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    node "$HOME/.claude/story/bin/story-tools.cjs" state start-stage portraits
    ```
 
-3. Verify prerequisites:
-   - `GEMINI_API_KEY` (or `NANOBANANA_GEMINI_API_KEY`) is set — check `.env`.
-     If missing, ask the user before proceeding.
-   - `gemini` CLI on PATH and nanobanana extension installed:
-     `gemini extensions list | grep -q nanobanana || gemini extensions install https://github.com/gemini-cli-extensions/nanobanana`
+3. Load env + verify prerequisites:
+   ```bash
+   source "$HOME/.claude/story/bin/load-nsaf-env.sh"
+   ```
+   That's the safe env parser — line-by-line, no shell eval, immune to
+   unquoted `|` values that used to abort the pipeline (STORY-MAKER-ISSUES.md #4).
+
+   Then verify:
+   - Any of `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `NANOBANANA_API_KEY` is
+     set (the image helper accepts all three in that precedence order —
+     see STORY-MAKER-ISSUES.md #3). If none, ask the user to add
+     `GEMINI_API_KEY` to `~/nsaf/.env`.
+   - `python3` and `ffmpeg` on PATH.
+
+   NOTE: We no longer require the `gemini` CLI or its nanobanana
+   extension. The image helper calls Gemini's REST API directly
+   (STORY-MAKER-ISSUES.md #1).
 
 4. Read story-output/outline.md and parse the Character Reference Sheet:
    - Skip the `Narrator` row (no portrait needed).
@@ -92,6 +104,8 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    ```
    Log: `"Using user photo for <Name>: <source path>"`.
 
+   The `photo-to-portrait.sh` helper is pure ffmpeg — no env needed.
+
    For source (d), build the final prompt:
    ```
    <style preamble from the story's Visual Style Guide section in outline.md>
@@ -101,13 +115,22 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    view, full-body or torso composition, soft even lighting. The character is
    the only subject. No text.
    ```
-   Then call the AI helper:
+   Then call the AI helper (direct REST — bypasses the flaky gemini CLI +
+   nanobanana extension chain, see STORY-MAKER-ISSUES.md #1):
    ```bash
-   bash "$HOME/.claude/story/bin/nano-banana-image.sh" \
+   python3 "$HOME/.claude/story/bin/nano-banana-image.py" \
      "story-output/characters/<slug>.png" \
      "1:1" \
      "<final prompt above>"
    ```
+   The helper:
+   - Auto-sources `~/nsaf/.env`, accepts any of `GEMINI_API_KEY`,
+     `GOOGLE_API_KEY`, or `NANOBANANA_API_KEY`.
+   - Defaults to `gemini-2.5-flash-image` (flash — fast + available).
+     Override via `NANOBANANA_MODEL`; if that's pinned to a pro model and
+     the pro model 503s, the helper auto-falls-back to flash.
+   - Classifies errors: 429 (quota) exits immediately, 500/503 (transient)
+     retries with backoff. No more retrying-a-quota-error-for-an-hour.
    Log: `"Generated portrait for <Name> via Nano Banana"`.
 
 8. Verify every non-narrator character has a portrait PNG.

@@ -1,6 +1,6 @@
 ---
 name: story:narrate
-description: Generate multi-voice audio narration via TTS
+description: Generate multi-voice audio narration via TTS with cast-level dedup + loudness-matched transitions
 allowed-tools:
   - Read
   - Write
@@ -11,7 +11,10 @@ allowed-tools:
 ---
 <objective>
 Parse the script for voice tags, generate TTS audio for each voice segment,
-and assemble per-scene audio files with multi-voice narration.
+and assemble per-scene audio files with multi-voice narration. Every scene
+is polished via a per-segment loudnorm + fade-in/fade-out pass so voices
+match perceived loudness and boundaries feel smooth — no more clunky level
+jumps between speakers.
 
 Produces: story-output/audio/scene-01.mp3 through scene-NN.mp3
 </objective>
@@ -35,125 +38,179 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    node "$HOME/.claude/story/bin/story-tools.cjs" state start-stage narrate
    ```
 
-3. Read story-output/script.md — parse narration sections with [VOICE:name] tags.
-4. Read story-output/outline.md — get the Character Reference Sheet. Each row
-   has Name, Age, Gender, Accent, (Visual Description), (Portrait Prompt),
-   Voice ID, Voice Description.
-5. Read config for TTS settings:
+3. Read inputs:
+   - `story-output/script.md` — narration sections with `[VOICE:name]` tags.
+   - `story-output/outline.md` — Character Reference Sheet
+     (columns: Name, Age, Gender, Accent, Visual Description, Portrait Prompt,
+     Photo Path, Voice ID, Voice Description).
+
+4. Load ~/nsaf/.env safely (no shell eval — protects against unquoted `|`
+   values that used to abort the pipeline; see STORY-MAKER-ISSUES.md #4):
    ```bash
-   node "$HOME/.claude/story/bin/story-tools.cjs" config get tts_provider
-   node "$HOME/.claude/story/bin/story-tools.cjs" config get tts_model
+   source "$HOME/.claude/story/bin/load-nsaf-env.sh"
+   ```
+   Verify keys:
+   - `OPENAI_API_KEY` (openai TTS) or `ELEVENLABS_API_KEY` (elevenlabs). If
+     missing, pause and tell the user to add it to `~/nsaf/.env` — NOT to
+     the project.
+
+5. Read config:
+   ```bash
+   TTS_PROVIDER=$(node "$HOME/.claude/story/bin/story-tools.cjs" config get tts_provider --raw)
+   TTS_MODEL=$(node "$HOME/.claude/story/bin/story-tools.cjs" config get tts_model --raw)
    ```
 
-6. **Resolve every character's Voice ID deterministically (NOT by LLM vibes).**
+6. **Cast-level voice assignment (dedup'd, one call for the whole cast).**
 
-   For each row in the Character Reference Sheet whose Voice ID column is
-   blank/`—`, run:
-   ```bash
-   node "$HOME/.claude/story/bin/pick-voice.cjs" \
-     "<tts_provider>" "<Age>" "<Gender>" "<Accent>" "<Voice Description>"
-   ```
-   The script returns one of:
-   - A concrete voice ID (e.g. `echo`, `nova`, or a 20-char ElevenLabs ID).
-   - `SEARCH:<query>` — only happens for ElevenLabs when the user hasn't
-     supplied `~/.claude/story/elevenlabs-voices.json`. In that case, run a
-     `GET https://api.elevenlabs.io/v2/voices?search=<query>&voice_type=premade`
-     call and take the top result's `voice_id`.
-
-   Write the resolved Voice ID back into outline.md's reference sheet so
-   subsequent runs are stable, and cache the picks in
-   `story-output/voice-assignments.json` (`{ "<name>": "<voice_id>" }`).
-
-   This replaces the prior LLM-picks-from-six-voices step that produced
-   inappropriate matches (e.g. British-woman voice for a young boy).
-
-7. Verify API keys are available:
-   - Source `~/nsaf/.env` if not already in scope:
-     ```bash
-     set -a; [ -f "$HOME/nsaf/.env" ] && source "$HOME/nsaf/.env"; set +a
-     ```
-     `~/nsaf/.env` is the single source of truth for all NSAF API keys. Do NOT
-     create a per-project `.env` and do NOT ask the user to paste keys inline.
-   - Then check `OPENAI_API_KEY` (required for openai TTS).
-   - If `tts_provider=elevenlabs`, also require `ELEVENLABS_API_KEY`.
-   - If a required key is still missing after sourcing, tell the user it needs
-     to be added to `~/nsaf/.env` — not the project — and pause.
-
-8. Ensure story-output/audio/ directory exists.
-
-9. Check for already-generated audio (for resumability):
-   - List existing files in story-output/audio/
-   - Skip scenes that already have audio.
-
-10. For each scene that needs audio:
-    a. Parse the [VOICE:name] tags to extract text segments per voice.
-    b. For each voice segment:
-      - Look up the voice ID from voice-assignments.json (or reference sheet).
-      - Call the TTS API.
-        - **openai/tts-1-hd (default):**
-          ```bash
-          curl -s https://api.openai.com/v1/audio/speech \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"tts-1-hd","input":"...","voice":"<resolved voice id>"}' \
-            --output segment.mp3
-          ```
-        - **elevenlabs:**
-          ```bash
-          curl -s "https://api.elevenlabs.io/v1/text-to-speech/<voice_id>?output_format=mp3_22050_32" \
-            -H "xi-api-key: $ELEVENLABS_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"text":"...","model_id":"eleven_multilingual_v2"}' \
-            --output segment.mp3
-          ```
-          NOTE: ElevenLabs returns 22050 Hz mono MP3 by default; match the
-          `-ar` in the concat filter below to 22050 when this provider is
-          active. The concat filter rebuilds frame boundaries so a mid-pipeline
-          sample-rate switch is fine — just keep all segments WITHIN one scene
-          at the same rate.
-      - Save as temp file: story-output/audio/segments/scene-NN-seg-MM.mp3
-   c. Concatenate segments with brief silence (0.3s) between speakers using FFmpeg's
-      **concat filter** — NOT the `concat:` protocol with `-c copy`.
-
-      WHY: byte-concatenating MP3s with `-c copy` keeps each segment's encoder
-      delay/padding, leaving a click/gap at every join (audible as "choppy" audio),
-      and silently drops audio when segment params differ. Re-encoding through the
-      concat filter rebuilds clean frame boundaries. Generate the inter-speaker
-      silence inline at the SAME params as the TTS output (OpenAI TTS = 24 kHz mono)
-      rather than from a static silence.mp3 that may mismatch.
-
-      Build the whole scene in one pass. Example for 3 voice segments with 0.3s
-      silence between speakers (interleave one `anullsrc` input between each segment):
-      ```bash
-      ffmpeg \
-        -i scene-NN-seg-01.mp3 -f lavfi -t 0.3 -i anullsrc=r=24000:cl=mono \
-        -i scene-NN-seg-02.mp3 -f lavfi -t 0.3 -i anullsrc=r=24000:cl=mono \
-        -i scene-NN-seg-03.mp3 \
-        -filter_complex "[0:a][1:a][2:a][3:a][4:a]concat=n=5:v=0:a=1[out]" \
-        -map "[out]" -c:a libmp3lame -ar 24000 -ac 1 -b:a 192k \
-        story-output/audio/scene-NN.mp3
+   a. Build `story-output/cast.json` from the character reference sheet — one
+      object per non-Narrator character plus one for the narrator:
+      ```json
+      [
+        {"name": "narrator", "age": "-",  "gender": "-",      "accent": "neutral-us", "hint": "<Voice Description>"},
+        {"name": "Freddie",  "age": "7",  "gender": "male",   "accent": "neutral-us", "hint": "curious brave boy"},
+        {"name": "Alden",    "age": "3",  "gender": "male",   "accent": "neutral-us", "hint": "tiny toddler"}
+      ]
       ```
-      Generalize: N voice segments → interleave (N-1) `anullsrc` silence inputs →
-      `concat=n=(2N-1)`. Match `-ar`/`-ac`/`cl` to the actual TTS output params
-      (confirm with `ffprobe` if unsure). A single voice segment needs no concat —
-      just copy/encode it directly to scene-NN.mp3.
-   d. Save final audio as story-output/audio/scene-NN.mp3
-   e. Clean up temp segment files
-   f. Log progress: "Generated audio for scene N of M"
+      Character names MUST match the `[VOICE:name]` tags exactly (case-sensitive).
 
-11. Normalize audio levels across all scene files (optional, using FFmpeg loudnorm).
+   b. Call the cast-level picker:
+      ```bash
+      node "$HOME/.claude/story/bin/pick-voice.cjs" cast "$TTS_PROVIDER" \
+        story-output/cast.json --out story-output/voice-assignments.json
+      ```
+      The picker:
+      - For openai: dedups across the cast (no more Freddie + Alden both
+        getting `echo` — fixes #8).
+      - For elevenlabs: fetches the full /v2/voices list, scores each by
+        gender/age/accent/description labels (NOT the buggy name-only
+        `search=` param), falls back to /v1/shared-voices when the premade
+        set has no plausible match for child/elderly characters
+        (fixes #7). Caches the voice list at
+        `~/.claude/story/elevenlabs-voices-cache.json` for 24h.
 
-12. Verify all scene audio files exist.
+   c. Write the resolved Voice ID back into `outline.md`'s reference sheet
+      (Voice ID column) so re-runs are stable.
 
-13. Complete stage:
+7. Ensure `story-output/audio/` and `story-output/audio/segments/` exist.
+
+8. **Provider-aware resumability check** (fixes #10). For each scene:
+   - If `scene-NN.mp3` exists AND
+     `scene-NN.mp3.sidecar.json` exists AND
+     the sidecar's `provider` + `voice_assignments_hash` match the CURRENT
+     provider + current voice-assignments.json → **skip**.
+   - Otherwise (missing sidecar, mismatched provider, or changed voice
+     casting) → **delete stale artifacts and regenerate**. This prevents
+     the "stale 24 kHz OpenAI file survives ElevenLabs re-render" failure.
+
+9. For each scene that needs audio:
+
+   a. Parse the scene's `### Narration` block into ordered
+      `(voice_name, text)` segments by splitting on `[VOICE:name]` tags.
+      Collapse internal whitespace/newlines within each segment to single
+      spaces.
+
+   b. Determine the TTS sample rate:
+      - openai/tts-1-hd → 24000
+      - elevenlabs (mp3_22050_32) → 22050
+
+   c. For each segment `MM`, generate the raw TTS mp3 at
+      `story-output/audio/segments/scene-NN-seg-MM.mp3`:
+
+      **openai:**
+      ```bash
+      curl -s https://api.openai.com/v1/audio/speech \
+        -H "Authorization: Bearer $OPENAI_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg v "<voice_id>" --arg t "<text>" \
+              '{model:"tts-1-hd",voice:$v,input:$t}')" \
+        --output "story-output/audio/segments/scene-NN-seg-MM.mp3"
+      ```
+
+      **elevenlabs:**
+      ```bash
+      curl -s "https://api.elevenlabs.io/v1/text-to-speech/<voice_id>?output_format=mp3_22050_32" \
+        -H "xi-api-key: $ELEVENLABS_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg t "<text>" '{text:$t,model_id:"eleven_multilingual_v2"}')" \
+        --output "story-output/audio/segments/scene-NN-seg-MM.mp3"
+      ```
+
+   d. **Concatenate with the audio polish helper** (per-segment loudnorm at
+      -16 LUFS + 25 ms fade-in + 50 ms fade-out + matched-rate silence
+      between speakers — this fixes the "clunky transitions" complaint):
+      ```bash
+      bash "$HOME/.claude/story/bin/concat-scene-audio.sh" \
+        "story-output/audio/scene-NN.mp3" \
+        "$SR" 0.3 \
+        story-output/audio/segments/scene-NN-seg-01.mp3 \
+        story-output/audio/segments/scene-NN-seg-02.mp3 \
+        ...
+      ```
+      Do NOT build the ffmpeg concat command inline — the helper handles
+      loudnorm + fades + concat + single-segment case in one place.
+
+   e. **Write the provider sidecar** so future re-runs can invalidate
+      correctly on provider/cast changes:
+      ```bash
+      HASH=$(sha256sum story-output/voice-assignments.json | cut -c1-16)
+      cat > "story-output/audio/scene-NN.mp3.sidecar.json" <<EOF
+      {
+        "provider": "$TTS_PROVIDER",
+        "sample_rate": $SR,
+        "voice_assignments_hash": "$HASH",
+        "generated_at": "$(date -Iseconds)"
+      }
+      EOF
+      ```
+
+   f. Log: `"Generated audio for scene N of M (<segments> segments, provider=<TTS_PROVIDER>, sr=<SR>)"`.
+
+10. Optional: cross-scene loudness normalization pass (all scenes to a
+    common -16 LUFS integrated). The per-segment loudnorm inside each scene
+    already handles per-voice level; this extra pass just aligns scene-to-
+    scene averages if some scenes have more silence than others.
+
+11. Verify all scene audio files exist AND all sidecars match the current
+    provider hash.
+
+12. Complete stage:
     ```bash
     node "$HOME/.claude/story/bin/story-tools.cjs" state complete-stage narrate --output story-output/audio/
     ```
 
-14. Check next and auto-continue:
+13. Check next and auto-continue:
     ```bash
     node "$HOME/.claude/story/bin/story-tools.cjs" graph next
     ```
     If illustrate is still pending → invoke `/story:illustrate`
-    If illustrate is complete → invoke `/story:build`
+    If illustrate is complete → invoke `/story:build` (and optionally `/story:pdf`)
 </process>
+
+<notes>
+- **Why the concat helper matters:** the old inline ffmpeg approach concatenated
+  raw TTS segments with no loudness match and hard cuts at segment boundaries.
+  Different voices at different perceived loudness produced the "clunky
+  transitions" complaint. `concat-scene-audio.sh` applies loudnorm-16 LUFS per
+  segment + 25 ms fade-in + 50 ms fade-out before concat, closing that gap.
+
+- **Why cast-level dedup matters:** the old picker resolved each character
+  independently. In a small cast with two young boys, both got `echo`
+  (OpenAI's boy-adjacent voice) and sounded identical. Cast mode assigns
+  Freddie → echo, Alden → nova. Same principle applies to ElevenLabs when
+  two adults score similarly on the same premade voice.
+
+- **Why the sidecar matters:** switching TTS providers mid-run used to leave
+  a stale first scene at the old sample rate, silently corrupting the concat.
+  The sidecar makes the resumability check provider-aware.
+
+- **ELEVENLABS voice discovery:** `/v2/voices?search=<query>` matches VOICE
+  NAMES, not label/description fields. Descriptive queries returned zero
+  results. The picker instead fetches the full premade list and scores each
+  voice against character labels — MUCH higher hit rate.
+
+- **Child voice caveat:** ElevenLabs prohibits child-like voices in its public
+  Voice Library. For child characters the picker falls back to
+  `/v1/shared-voices` (community library, which has genuine child voices
+  under different content-policy rules). If that also finds nothing, the
+  closest "young" premade voice is used and a warning is logged.
+</notes>

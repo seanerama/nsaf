@@ -202,9 +202,24 @@ function cmdStateCompleteStage(cwd, stageId, outputPaths, raw) {
 
   const date = new Date().toISOString().split('T')[0];
 
-  // Mark checklist item complete
-  const checkRegex = new RegExp(`- \\[ \\] ${stage.name}(?:\\s|$)`);
-  content = content.replace(checkRegex, `- [x] ${stage.name} — done (${date})`);
+  // Mark checklist item complete. Use lookahead to NOT consume the trailing
+  // newline — the previous consumption bug caused all completed items to
+  // merge onto a single line (`- [x] Start — done (…)- [x] Outline — done …`)
+  // which then broke buildStateFrontmatter's per-line regex and silently
+  // dropped stages (notably portraits + pdf) from completed_stages.
+  const checkRegex = new RegExp(`- \\[ \\] ${stage.name}(?=\\s|$)`);
+  if (checkRegex.test(content)) {
+    content = content.replace(checkRegex, `- [x] ${stage.name} — done (${date})`);
+  } else {
+    // The stage isn't in the human-readable checklist yet (older STATE.md
+    // template that predates this stage). Append it so buildStateFrontmatter
+    // will regenerate completed_stages correctly and future stages remain
+    // stable across reruns.
+    content = content.replace(
+      /## Completed Stages\s*\n/,
+      match => `${match}- [x] ${stage.name} — done (${date})\n`
+    );
+  }
 
   // Remove from Active Stages
   const activeRegex = new RegExp(`\\*\\*${stage.name}:\\*\\*.*\\n?`, 'g');

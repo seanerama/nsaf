@@ -41,12 +41,19 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    node "$HOME/.claude/story/bin/story-tools.cjs" state start-stage illustrate
    ```
 
-3. Read inputs:
+3. Load env safely:
+   ```bash
+   source "$HOME/.claude/story/bin/load-nsaf-env.sh"
+   ```
+   Line-by-line parser, no shell eval — protects against unquoted `|`
+   values in `.env` (STORY-MAKER-ISSUES.md #4).
+
+4. Read inputs:
    - story-output/script.md — illustration prompt + characters present per scene.
    - story-output/outline.md — Visual Style Guide + Character Reference Sheet.
    - story-output/characters/ — per-character portrait PNGs.
 
-4. Read config:
+5. Read config:
    ```bash
    node "$HOME/.claude/story/bin/story-tools.cjs" config get resolution
    node "$HOME/.claude/story/bin/story-tools.cjs" config get image_provider
@@ -54,10 +61,10 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    `image_provider` defaults to `nano-banana`. Other accepted values:
    `leonardo` (legacy text-only path).
 
-5. Ensure story-output/images/ exists. Skip scenes that already have a non-empty
+6. Ensure story-output/images/ exists. Skip scenes that already have a non-empty
    PNG (resumability).
 
-6. **Provider = nano-banana (default):**
+7. **Provider = nano-banana (default):**
 
    For each scene NN that needs an image:
 
@@ -70,28 +77,37 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
 
    b. Take the scene's `### Illustration Prompt` block from script.md.
 
-   c. Call the helper:
+   c. Call the direct-REST helper (bypasses the flaky gemini CLI + nanobanana
+      extension chain that was the biggest issue in STORY-MAKER-ISSUES.md #1):
       ```bash
-      bash "$HOME/.claude/story/bin/nano-banana-image.sh" \
+      python3 "$HOME/.claude/story/bin/nano-banana-image.py" \
         "story-output/images/scene-NN.png" \
         "16:9" \
         "<scene illustration prompt>" \
         story-output/characters/<char1>.png \
         story-output/characters/<char2>.png
       ```
-      The helper passes refs to `gemini --yolo "/edit ref1 ref2 ... '<compose prompt>'"`
-      and crops/pads the result to exactly 1920×1080 via FFmpeg.
+      The helper POSTs to `:generateContent` with refs as `inlineData` parts
+      and a compose prompt that instructs Gemini to preserve each ref
+      character's identity. It then ffmpeg-crops to exactly 1920×1080.
 
    d. Cap reference inputs at 5 portraits per scene (Gemini Flash Image limit).
       If the scene names >5 characters, prefer the ones with dialogue in this
       scene, then prominence.
 
-   e. If the helper exits non-zero (gemini missing, quota, etc.), fall through to
-      provider = leonardo for that scene and log which scenes fell back.
+   e. **Error classification** (STORY-MAKER-ISSUES.md #6): the helper exits
+      with a classified reason:
+      - Exit 3: no API key (add to `~/nsaf/.env`)
+      - Exit 5 + "quota exhausted" in stderr → 429/RESOURCE_EXHAUSTED
+        (billing or wrong-tier key — don't retry, tell the user)
+      - Exit 5 + other → check stderr for the model's actual status
+      - Exit 7: ffmpeg crop failure
+      Only fall through to `provider = leonardo` for that scene when the
+      helper exits with a NON-quota error. On 429, pause and tell the user.
 
    f. Log progress: "Generated scene N of M via nano-banana (refs: alden, freddie)".
 
-7. **Provider = leonardo (legacy fallback / explicit override):**
+8. **Provider = leonardo (legacy fallback / explicit override):**
 
    For each scene NN that needs an image:
    a. Take the illustration prompt from script.md.
@@ -99,16 +115,16 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    c. Call `mcp__leonardo-ai__high_definition_generalist` at 1920×1080.
    d. Save to story-output/images/scene-NN.png.
 
-8. Optionally generate a title card image (scene-00.png or title.png).
+9. Optionally generate a title card image (scene-00.png or title.png).
 
-9. Verify all scene images exist and are 1920×1080.
+10. Verify all scene images exist and are 1920×1080.
 
-10. Complete stage:
+11. Complete stage:
     ```bash
     node "$HOME/.claude/story/bin/story-tools.cjs" state complete-stage illustrate --output story-output/images/
     ```
 
-11. Check next and auto-continue:
+12. Check next and auto-continue:
     ```bash
     node "$HOME/.claude/story/bin/story-tools.cjs" graph next
     ```

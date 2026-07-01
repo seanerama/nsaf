@@ -333,13 +333,77 @@ function which(cmd) {
   } catch { return null; }
 }
 
-const chromeCandidates = [
-  'google-chrome',
-  'google-chrome-stable',
-  'chromium',
-  'chromium-browser',
-];
-const chromeBin = chromeCandidates.map(which).find(Boolean);
+// Discover a headless-Chrome executable in this order:
+//   1. Explicit env vars: PUPPETEER_EXECUTABLE_PATH, CHROME_PATH
+//   2. Standard PATH candidates (google-chrome, chromium, ...)
+//   3. Playwright's bundled Chromium cache (~/.cache/ms-playwright/chromium*/chrome-linux/chrome)
+//   4. Puppeteer's bundled Chrome cache (~/.cache/puppeteer/chrome/*/chrome-linux*/chrome)
+//
+// The old detection only checked (2). When the server had Playwright installed
+// (for other projects) with a bundled Chromium at ~/.cache/ms-playwright/
+// chromium-1194/chrome-linux/chrome, the PDF stage reported "no PDF renderer"
+// even though a headless browser was available. See STORY-MAKER-ISSUES.md #9.
+function findChromeBin() {
+  // 1. Explicit env-var overrides.
+  for (const envVar of ['PUPPETEER_EXECUTABLE_PATH', 'CHROME_PATH']) {
+    const p = process.env[envVar];
+    if (p && fs.existsSync(p)) {
+      try {
+        // Must be executable (or at least a regular file).
+        const st = fs.statSync(p);
+        if (st.isFile()) return p;
+      } catch {}
+    }
+  }
+
+  // 2. Standard PATH candidates.
+  const standard = [
+    'google-chrome',
+    'google-chrome-stable',
+    'chromium',
+    'chromium-browser',
+  ];
+  for (const c of standard) {
+    const p = which(c);
+    if (p) return p;
+  }
+
+  // 3 & 4. Bundled browser caches. Use fs to glob for the newest matching
+  // directory rather than shelling out to `find` (which is slow for big caches
+  // and adds a shell dep).
+  const home = process.env.HOME || '';
+  const bundleRoots = [
+    // Playwright
+    { root: path.join(home, '.cache/ms-playwright'), prefix: 'chromium', tail: 'chrome-linux/chrome' },
+    { root: path.join(home, '.cache/ms-playwright'), prefix: 'chromium', tail: 'chrome-linux/headless_shell' },
+    // Puppeteer
+    { root: path.join(home, '.cache/puppeteer/chrome'), prefix: '', tail: 'chrome-linux/chrome' },
+    { root: path.join(home, '.cache/puppeteer/chrome'), prefix: '', tail: 'chrome-linux64/chrome' },
+  ];
+  for (const b of bundleRoots) {
+    if (!fs.existsSync(b.root)) continue;
+    let entries;
+    try { entries = fs.readdirSync(b.root); } catch { continue; }
+    // Filter by prefix and sort descending so the newest bundle wins
+    // (bundles are versioned, e.g. chromium-1194).
+    const matches = entries
+      .filter(e => e.startsWith(b.prefix))
+      .sort()
+      .reverse();
+    for (const dir of matches) {
+      const candidate = path.join(b.root, dir, b.tail);
+      if (fs.existsSync(candidate)) {
+        try {
+          if (fs.statSync(candidate).isFile()) return candidate;
+        } catch {}
+      }
+    }
+  }
+
+  return null;
+}
+
+const chromeBin = findChromeBin();
 
 let ok = false;
 if (chromeBin) {
@@ -348,6 +412,9 @@ if (chromeBin) {
     '--headless=new',
     '--disable-gpu',
     '--no-sandbox',
+    // Bundled Playwright/Puppeteer chromiums need this to run without a real
+    // /dev/shm (common on headless servers); mainline google-chrome ignores it.
+    '--disable-dev-shm-usage',
     '--no-pdf-header-footer',
     '--virtual-time-budget=10000',
     `--print-to-pdf=${outPath}`,
@@ -372,7 +439,15 @@ if (chromeBin) {
     ], { stdio: 'inherit' });
     ok = r.status === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 0;
   } else {
-    console.error('no PDF renderer found (looked for google-chrome / chromium / wkhtmltopdf)');
+    console.error(
+      'no PDF renderer found. Checked:\n' +
+      '  - PUPPETEER_EXECUTABLE_PATH / CHROME_PATH env vars\n' +
+      '  - PATH: google-chrome, google-chrome-stable, chromium, chromium-browser\n' +
+      '  - ~/.cache/ms-playwright/chromium*/chrome-linux/chrome (Playwright bundled)\n' +
+      '  - ~/.cache/puppeteer/chrome/*/chrome-linux*/chrome (Puppeteer bundled)\n' +
+      '  - PATH: wkhtmltopdf\n' +
+      'Install one, or export PUPPETEER_EXECUTABLE_PATH pointing at a Chrome binary.'
+    );
     process.exit(4);
   }
 }

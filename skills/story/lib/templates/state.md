@@ -5,7 +5,7 @@ completed_stages: []
 active_stages: []
 last_updated: "{{TIMESTAMP}}"
 progress:
-  total_stages: 6
+  total_stages: 8
   completed_stages: 0
   percent: 0
 ---
@@ -21,9 +21,11 @@ progress:
 - [ ] Start
 - [ ] Outline
 - [ ] Write
+- [ ] Portraits
 - [ ] Illustrate
 - [ ] Narrate
 - [ ] Build
+- [ ] PDF
 
 ## Active Stages
 
