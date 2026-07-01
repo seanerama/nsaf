@@ -6,8 +6,12 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.ruff_cache/
 venv/
 .venv/
+*.egg-info/
+build/
+dist/
 
 # --- Node ---
 node_modules/
@@ -35,6 +39,7 @@ projects/
 output/
 tmp/
 temp/
+data/         # ~/nsaf/data/<skill>/ — persistent per-skill runtime state (brief profiles + library, etc.)
 
 # --- Backups ---
 *.bak

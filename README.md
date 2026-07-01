@@ -96,12 +96,14 @@ NSAF is also the monorepo for the personal Claude Code **skills** and **subagent
 
 ```
 skills/
+├── brief/       — Daily Brief: profile-aware on-demand news catch-up (Python)
 ├── story/       — illustrated audio-story pipeline (Nano Banana + TTS)
 ├── sws/         — StudyWS textbook / study-guide generator
 ├── ilg/         — Interactive Learning Guide builder
 ├── verity/      — Autonomy framework (architect, review, ship, sre, worker)
 ├── vp/          — VibrationPlan project workflow (commands-only)
-└── sdd/         — Spec-Driven DevOps workflow
+├── sdd/         — Spec-Driven DevOps workflow
+└── tg/          — Techguide (build/scope/write × comparison/deep/explainer variants)
 
 Each prefix follows the same layout:
     commands/    ← .md skill files, invoked as /<prefix>:<stem>
@@ -111,6 +113,8 @@ agents/
 ├── friction-scribe.md          — Verity first-run friction triage
 └── project-troubleshooter.md   — post-deployment investigation + GitHub issue filing
 ```
+
+**Skills with runtime state** (brief profiles, orchestrator SQLite, etc.) keep persistent data at `~/nsaf/data/<skill>/` on the dev server — gitignored, referenced by env vars like `BRIEF_DATA_DIR`. Per-invocation output (a specific brief run, an SWS textbook build, a story) goes to `~/nsaf/projects/<slug>/`.
 
 To add a feature to a skill: edit files under `skills/<prefix>/`, commit, done. Slash commands (`/story:*`, `/verity:*`, …) work transparently through the symlinks. To spawn a subagent, use Claude Code's Task tool with the subagent's `name` from `agents/`.
 

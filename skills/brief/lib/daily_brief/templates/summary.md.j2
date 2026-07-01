@@ -1,0 +1,34 @@
+{% if run.requested_topic %}# Brief: {{ run.requested_topic }}{% else %}# {{ run.profile|capitalize }} Brief{% endif %}
+
+_Profile: {{ run.profile }} · {{ run.trigger }} · {{ run.started_at }}_
+
+{% if run.items %}
+{% for topic in topics %}
+## {{ topic.name }}
+
+{% for item in topic.entries %}
+### {{ item.title }}
+
+{{ item.summary }}
+
+**Why this matters:** {{ item.why_it_matters }}
+{% if item.prior_coverage %}
+
+_Prior coverage:{% for p in item.prior_coverage %} {{ p.source }} ({{ p.date }}){% if not loop.last %},{% endif %}{% endfor %}_
+{% endif %}
+
+{% if item.url %}Source: [{{ item.source.name }}]({{ item.url }}){% else %}Source: {{ item.source.name }}{% endif %}{% if item.published %} · {{ item.published }}{% endif %}
+
+{% endfor %}
+{% endfor %}
+{% else %}
+_No new items found._
+{% endif %}
+{% if run.failures %}
+---
+
+**Could not fetch:**
+{% for f in run.failures %}
+- {{ f.source }} — {{ f.reason }}
+{% endfor %}
+{% endif %}

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} — Daily-Brief</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e7e9ee; --muted:#9aa3b2; --accent:#6ea8fe;
+          --chip:#262b36; --chip-on:#2f6fed; --line:#2a2f3a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:20px 24px 8px; border-bottom:1px solid var(--line); position:sticky; top:0;
+           background:var(--bg); z-index:5; }
+  h1 { margin:0 0 4px; font-size:1.45rem; }
+  .meta { color:var(--muted); font-size:.85rem; }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; }
+  #search { flex:1 1 240px; min-width:180px; padding:8px 12px; border-radius:8px;
+            border:1px solid var(--line); background:var(--card); color:var(--fg); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { padding:5px 10px; border-radius:999px; background:var(--chip); color:var(--fg);
+          border:1px solid var(--line); font-size:.8rem; cursor:pointer; user-select:none; }
+  .chip.on { background:var(--chip-on); border-color:var(--chip-on); }
+  label.toggle { color:var(--muted); font-size:.8rem; display:flex; gap:6px; align-items:center;
+                 cursor:pointer; }
+  main { padding:16px 24px 64px; max-width:900px; margin:0 auto; }
+  details.topic { background:transparent; margin:14px 0; }
+  details.topic > summary { font-size:1.1rem; font-weight:600; cursor:pointer; padding:6px 0;
+                            list-style:none; }
+  details.topic > summary::before { content:"▸ "; color:var(--accent); }
+  details.topic[open] > summary::before { content:"▾ "; }
+  .item { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:14px 16px; margin:10px 0; }
+  .item.read { opacity:.5; }
+  .item h3 { margin:0 0 6px; font-size:1.02rem; }
+  .item h3 a { color:var(--fg); text-decoration:none; }
+  .item h3 a:hover { color:var(--accent); }
+  .why { margin:8px 0; padding:8px 10px; border-left:3px solid var(--accent);
+         background:rgba(110,168,254,.08); border-radius:4px; }
+  .src { color:var(--muted); font-size:.82rem; margin-top:6px; }
+  .prior { color:#d6a86e; font-size:.8rem; margin-top:4px; }
+  .row { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+  .read-box { font-size:.78rem; color:var(--muted); white-space:nowrap; }
+  audio { width:100%; margin-top:8px; }
+  .audio-wrap { background:var(--card); border:1px dashed var(--line); border-radius:10px;
+                padding:12px 16px; margin:12px 0; color:var(--muted); font-size:.85rem; }
+  .empty, .failures { color:var(--muted); }
+  .failures { margin-top:24px; border-top:1px solid var(--line); padding-top:12px; font-size:.85rem; }
+</style>
+</head>
+<body data-run="{{ run_id }}">
+<header>
+  <h1>{{ title }}</h1>
+  <div class="meta">Profile: {{ run.profile }} · {{ run.trigger }} · {{ run.started_at }}
+    · {{ run.items|length }} item(s)</div>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Search items…" aria-label="Search">
+    <label class="toggle"><input type="checkbox" id="hide-read"> hide read</label>
+  </div>
+  {% if sources %}
+  <div class="controls"><span class="meta">Sources:</span>
+    <div class="chips" id="source-chips">
+      {% for s in sources %}<span class="chip on" data-source="{{ s }}">{{ s }}</span>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if dates %}
+  <div class="controls"><span class="meta">Dates:</span>
+    <div class="chips" id="date-chips">
+      {% for d in dates %}<span class="chip on" data-date="{{ d }}">{{ d }}</span>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</header>
+<main>
+  <div class="audio-wrap">
+    🎧 <strong>Podcast</strong>:
+    <audio controls preload="none" id="brief-audio" style="display:none"></audio>
+    <span id="audio-note">Audio generation arrives in v2 — see <code>podcast-script.md</code> for the script.</span>
+  </div>
+
+  {% if run.items %}
+  {% for topic in topics %}
+  <details class="topic" open data-topic="{{ topic.name }}">
+    <summary>{{ topic.name }} <span class="meta">({{ topic.entries|length }})</span></summary>
+    {% for item in topic.entries %}
+    <article class="item" data-id="{{ item.id }}" data-topic="{{ topic.name }}"
+             data-source="{{ item.source.name }}" data-date="{{ item.published or '' }}"
+             data-text="{{ (item.title ~ ' ' ~ item.summary)|lower }}">
+      <div class="row">
+        <h3>{% if item.url %}<a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}</h3>
+        <label class="read-box"><input type="checkbox" class="read-toggle"> read</label>
+      </div>
+      {% if item.summary %}<div class="summary">{{ item.summary }}</div>{% endif %}
+      {% if item.why_it_matters %}<div class="why"><strong>Why this matters:</strong> {{ item.why_it_matters }}</div>{% endif %}
+      {% if item.prior_coverage %}
+      <div class="prior">Also covered by{% for p in item.prior_coverage %} {{ p.source }} on {{ p.date }}{% if not loop.last %},{% endif %}{% endfor %}.</div>
+      {% endif %}
+      <div class="src">{{ item.source.name }}{% if item.source.type %} · {{ item.source.type }}{% endif %}{% if item.published %} · {{ item.published }}{% endif %}</div>
+    </article>
+    {% endfor %}
+  </details>
+  {% endfor %}
+  {% else %}
+  <p class="empty">No new items found for this run.</p>
+  {% endif %}
+
+  {% if run.failures %}
+  <div class="failures"><strong>Could not fetch:</strong>
+    <ul>{% for f in run.failures %}<li>{{ f.source }} — {{ f.reason }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+</main>
+<script>
+(function () {
+  var runId = document.body.getAttribute("data-run");
+  var keyFor = function (id) { return "brief-read:" + runId + ":" + id; };
+  var items = Array.prototype.slice.call(document.querySelectorAll(".item"));
+
+  // Restore mark-as-read state from localStorage.
+  items.forEach(function (el) {
+    var id = el.getAttribute("data-id");
+    var box = el.querySelector(".read-toggle");
+    if (localStorage.getItem(keyFor(id)) === "1") { el.classList.add("read"); box.checked = true; }
+    box.addEventListener("change", function () {
+      if (box.checked) { el.classList.add("read"); localStorage.setItem(keyFor(id), "1"); }
+      else { el.classList.remove("read"); localStorage.removeItem(keyFor(id)); }
+      applyFilters();
+    });
+  });
+
+  var search = document.getElementById("search");
+  var hideRead = document.getElementById("hide-read");
+
+  function activeSet(containerId, attr) {
+    var on = {};
+    var chips = document.querySelectorAll("#" + containerId + " .chip");
+    if (!chips.length) return null;
+    chips.forEach(function (c) { if (c.classList.contains("on")) on[c.getAttribute(attr)] = true; });
+    return on;
+  }
+
+  function applyFilters() {
+    var q = (search.value || "").toLowerCase().trim();
+    var srcOn = activeSet("source-chips", "data-source");
+    var dateOn = activeSet("date-chips", "data-date");
+    items.forEach(function (el) {
+      var ok = true;
+      if (q && el.getAttribute("data-text").indexOf(q) === -1) ok = false;
+      if (ok && srcOn && !srcOn[el.getAttribute("data-source")]) ok = false;
+      if (ok && dateOn) { var d = el.getAttribute("data-date"); if (d && !dateOn[d]) ok = false; }
+      if (ok && hideRead.checked && el.classList.contains("read")) ok = false;
+      el.style.display = ok ? "" : "none";
+    });
+  }
+
+  search.addEventListener("input", applyFilters);
+  hideRead.addEventListener("change", applyFilters);
+  document.querySelectorAll(".chip").forEach(function (c) {
+    c.addEventListener("click", function () { c.classList.toggle("on"); applyFilters(); });
+  });
+  applyFilters();
+})();
+</script>
+</body>
+</html>
