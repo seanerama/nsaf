@@ -1,7 +1,7 @@
 ---
 name: story:start
 description: Begin a new illustrated audio story
-argument-hint: "[story idea]"
+argument-hint: "[story idea text | path to idea .md file]"
 allowed-tools:
   - Read
   - Write
@@ -67,12 +67,28 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init start`
    ```
 
 8. Capture the user's story idea:
-   - If arguments provided, use them as the initial idea
-   - If no arguments, ask the user for their story idea
-   - Ask minimal clarifying questions (or none if the idea is clear)
-   - Extract or generate: title, genre, tone, target length, art style
-   - If characters are mentioned, capture names and descriptions
-   - Default art style to "watercolor storybook" unless the idea suggests otherwise
+   - **If arguments provided, resolve idea source:**
+     - Check whether the argument is a path to a readable file:
+       ```bash
+       ARG="{{args}}"
+       # Expand ~ if present
+       ARG="${ARG/#\~/$HOME}"
+       [ -f "$ARG" ] && [ -r "$ARG" ] && echo "file"
+       ```
+       If it's a readable file: use the Read tool to load the file's contents
+       as the story idea. Record the source path in concept.md's frontmatter
+       (add `idea_source: <absolute path>`) for provenance so a later re-read
+       is possible.
+     - Otherwise: treat the argument text as the idea directly (short idea
+       inline).
+   - **If no arguments**, ask the user for their story idea.
+   - Ask minimal clarifying questions (or none if the idea is clear and detailed —
+     e.g. a full plot in a referenced .md file usually needs no clarifying pass).
+   - Extract or generate: title, genre, tone, target length, art style.
+   - If the source has detailed plot beats, preserve them verbatim in
+     concept.md; do NOT paraphrase away specificity the author put in.
+   - If characters are mentioned, capture names and descriptions.
+   - Default art style to "watercolor storybook" unless the idea suggests otherwise.
    - Read the style guide: `~/.claude/story/references/style-guide.md`
 
    **If any character is based on a real person or pet**, tell the user
