@@ -48,7 +48,7 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    - **Character reference sheet**: a markdown table with these columns, one row
      per character (including a `Narrator` row):
 
-     | Name | Age | Gender | Accent | Visual Description | Portrait Prompt | Voice ID | Voice Description |
+     | Name | Age | Gender | Accent | Visual Description | Portrait Prompt | Photo Path | Voice ID | Voice Description |
 
      Column rules:
      - **Age**: integer years for kids ("7"), or category for adults/non-human
@@ -65,7 +65,17 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
        generating a single front-facing reference portrait (used by the
        `portraits` stage). MUST start with the style preamble for the story,
        describe the character standing in a neutral plain background, neutral
-       expression, full body or three-quarter view. Narrator: `—`.
+       expression, full body or three-quarter view. Narrator: `—`. Ignored if
+       a user photo is provided (see below).
+     - **Photo Path**: `—` (default) OR an absolute path to a user-provided
+       photo. If set and the file exists, the `portraits` stage uses THAT photo
+       (cropped to 1024) as the character's identity anchor instead of AI-
+       generating one from the portrait prompt. Also honored automatically if
+       a photo is dropped at `story-output/characters-source/<slug>.<ext>`
+       (per-story) or `~/nsaf/data/story/characters/<slug>.<ext>` (reusable
+       library) — those convention paths win over Photo Path if both exist.
+       For fantasy or original characters where you want AI-generated art,
+       leave this `—`.
      - **Voice ID**: leave blank `—` — the `narrate` stage assigns this
        deterministically from `(Age, Gender, Accent)` against the configured TTS
        provider's voice library. Do NOT pick from the OpenAI 6 here; that choice

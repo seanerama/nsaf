@@ -16,9 +16,9 @@
 
 ## Character Reference Sheet
 
-| Name | Age | Gender | Accent | Visual Description | Portrait Prompt | Voice ID | Voice Description |
-|------|-----|--------|--------|-------------------|-----------------|----------|-------------------|
-| Narrator | — | — | neutral-us | — | — | — | Warm, measured pace |
+| Name | Age | Gender | Accent | Visual Description | Portrait Prompt | Photo Path | Voice ID | Voice Description |
+|------|-----|--------|--------|-------------------|-----------------|------------|----------|-------------------|
+| Narrator | — | — | neutral-us | — | — | — | — | Warm, measured pace |
 
 ## Scenes
 

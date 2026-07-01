@@ -44,8 +44,13 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init start`
 
 3. Create story-output/ directory structure:
    ```bash
-   mkdir -p story-output/images story-output/audio
+   mkdir -p story-output/images story-output/audio story-output/characters-source
    ```
+
+   The `characters-source/` dir is where the user drops photos to use as
+   character identity anchors (real people, pets). Named by character slug:
+   `alden.jpg`, `mocha-the-dog.png`, etc. Any FFmpeg-decodable format works.
+   See step 8 below for the user-facing prompt.
 
 4. Initialize STATE.md from template (story/templates/state.md) with current timestamp.
 
@@ -69,6 +74,23 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init start`
    - If characters are mentioned, capture names and descriptions
    - Default art style to "watercolor storybook" unless the idea suggests otherwise
    - Read the style guide: `~/.claude/story/references/style-guide.md`
+
+   **If any character is based on a real person or pet**, tell the user
+   how to provide reference photos:
+
+   > Drop reference photos for real-people/pet characters at
+   > `story-output/characters-source/<name>.<ext>` before running
+   > `/story:portraits` (accepted: png, jpg, jpeg, webp, heic). Name each
+   > file by the character's slug — e.g., `Alden` → `alden.jpg`,
+   > `Mocha the Dog` → `mocha-the-dog.png`.
+   >
+   > For characters you re-use across many stories, put photos at
+   > `~/nsaf/data/story/characters/<slug>.<ext>` instead — the pipeline
+   > checks there too.
+   >
+   > For any character without a photo, the pipeline AI-generates a
+   > portrait from the Visual Description in the outline. Mixed casts
+   > (real-photo kid, AI-generated dragon) work naturally.
 
 9. Write story-output/concept.md with all extracted information.
 
