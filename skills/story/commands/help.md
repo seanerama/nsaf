@@ -17,13 +17,14 @@ Display all available /story:* commands and the pipeline overview.
    **Pipeline Commands** (run in order):
    | Command | Description |
    |---------|-------------|
-   | `/story:start` | Begin a new story — capture your idea |
+   | `/story:start` | Begin a new story — capture your idea (accepts inline text OR a path to a .md file) |
    | `/story:outline` | Build story arc, characters (age/gender/accent), scenes |
    | `/story:write` | Write narration script + illustration prompts |
-   | `/story:portraits` | Generate hero portrait per character (refs for illustrate) |
+   | `/story:portraits` | Generate hero portrait per character (refs for illustrate; uses user photos when available) |
    | `/story:illustrate` | Generate scene images (Nano Banana w/ character refs, or Leonardo) |
    | `/story:narrate` | Generate multi-voice audio via TTS (deterministic voice picks) |
    | `/story:build` | Assemble final MP4 video |
+   | `/story:pdf` | Assemble print-ready PDF picture book (8.5×8.5 square) |
 
    **Utility Commands**:
    | Command | Description |
@@ -34,8 +35,8 @@ Display all available /story:* commands and the pipeline overview.
 
    **Pipeline Flow**:
    ```
-   start → outline ─┬→ write ─────┬→ illustrate ─┐
-                    └→ portraits ─┘               ├→ build → final.mp4
+   start → outline ─┬→ write ─────┬→ illustrate ─┬→ build → final.mp4
+                    └→ portraits ─┘               ├→ pdf   → print book
                                   └→ narrate ─────┘
    ```
 

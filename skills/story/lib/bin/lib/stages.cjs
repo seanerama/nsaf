@@ -71,7 +71,17 @@ const STAGES = {
     description: 'Assemble images and audio into final MP4 video',
     outputs: ['story-output/final.mp4'],
     depends_on: ['illustrate', 'narrate'],
-    parallel_with: [],
+    parallel_with: ['pdf'],
+  },
+  pdf: {
+    id: 'pdf',
+    name: 'PDF',
+    command: '/story:pdf',
+    phase: 'assembly',
+    description: 'Assemble a print-ready PDF picture book (8.5×8.5 square)',
+    outputs: ['story-output/print-book.html'],
+    depends_on: ['write', 'illustrate'],
+    parallel_with: ['narrate', 'build'],
   },
 };
 
@@ -84,7 +94,7 @@ const PHASES = {
 
 // ─── Stage sequence (ideal order) ────────────────────────────────────────────
 
-const STAGE_SEQUENCE = ['start', 'outline', 'write', 'portraits', 'illustrate', 'narrate', 'build'];
+const STAGE_SEQUENCE = ['start', 'outline', 'write', 'portraits', 'illustrate', 'narrate', 'build', 'pdf'];
 
 // ─── Lookup Helpers ──────────────────────────────────────────────────────────
 
