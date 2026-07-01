@@ -90,6 +90,32 @@ NSAF is three processes communicating through a shared SQLite database:
 - **Flask App** (Python) — serves the idea selection UI, QA pages, and Webex bot
 - **Idea Generator** (Python) — runs daily via cron to produce ideas and send the morning email
 
+## Skills & Agents
+
+NSAF is also the monorepo for the personal Claude Code **skills** and **subagents** that power the creative pipelines (story generation, StudyWS builds, interactive learning guides, Verity autonomy, etc.). Each skill's `.md` files, helper scripts, templates, and references live in this repo as the single source of truth; `~/.claude/commands/<prefix>` and `~/.claude/<prefix>` on the dev checkout are symlinks pointing here so edits are live locally with no deploy step.
+
+```
+skills/
+├── story/       — illustrated audio-story pipeline (Nano Banana + TTS)
+├── sws/         — StudyWS textbook / study-guide generator
+├── ilg/         — Interactive Learning Guide builder
+├── verity/      — Autonomy framework (architect, review, ship, sre, worker)
+├── vp/          — VibrationPlan project workflow (commands-only)
+└── sdd/         — Spec-Driven DevOps workflow
+
+Each prefix follows the same layout:
+    commands/    ← .md skill files, invoked as /<prefix>:<stem>
+    lib/         ← bin, references, templates, workflows (varies per skill)
+
+agents/
+├── friction-scribe.md          — Verity first-run friction triage
+└── project-troubleshooter.md   — post-deployment investigation + GitHub issue filing
+```
+
+To add a feature to a skill: edit files under `skills/<prefix>/`, commit, done. Slash commands (`/story:*`, `/verity:*`, …) work transparently through the symlinks. To spawn a subagent, use Claude Code's Task tool with the subagent's `name` from `agents/`.
+
+Server deployment of skills is by rsync from this repo (or the same symlink setup against a repo checkout on the server). See the `nsaf-skill-layout` memory doc for the current sync status.
+
 ## Prerequisites
 
 - Ubuntu 22.04+ server
@@ -201,6 +227,8 @@ No code changes needed — just edit the file and the next generation will refle
 ## Webex Bot Commands
 
 Control Nightshift AutoFoundry from your phone or desktop through Webex. Works in direct messages or spaces (tag the bot with `@Nightshift-AutoFoundry`).
+
+> **Note:** the per-command dispatcher model documented below is being retired in favor of a **dumb-relay model** — the bot will forward messages to a Claude Code session on the server, which routes to the right skill/subagent itself. See [`docs/webex-revamp.md`](docs/webex-revamp.md) for the design and migration plan. Commands listed here are the current state; they will collapse into "just talk to it" over time.
 
 ### Build Management
 
