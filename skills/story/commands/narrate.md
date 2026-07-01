@@ -67,10 +67,17 @@ Context loaded via: `node "$HOME/.claude/story/bin/story-tools.cjs" init run-sta
    This replaces the prior LLM-picks-from-six-voices step that produced
    inappropriate matches (e.g. British-woman voice for a young boy).
 
-7. Verify OPENAI_API_KEY is available:
-   - Check .env file in project root
-   - If not found, ask the user to provide it.
+7. Verify API keys are available:
+   - Source `~/nsaf/.env` if not already in scope:
+     ```bash
+     set -a; [ -f "$HOME/nsaf/.env" ] && source "$HOME/nsaf/.env"; set +a
+     ```
+     `~/nsaf/.env` is the single source of truth for all NSAF API keys. Do NOT
+     create a per-project `.env` and do NOT ask the user to paste keys inline.
+   - Then check `OPENAI_API_KEY` (required for openai TTS).
    - If `tts_provider=elevenlabs`, also require `ELEVENLABS_API_KEY`.
+   - If a required key is still missing after sourcing, tell the user it needs
+     to be added to `~/nsaf/.env` — not the project — and pause.
 
 8. Ensure story-output/audio/ directory exists.
 

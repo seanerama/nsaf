@@ -23,11 +23,21 @@
 #
 # Env:
 #   GEMINI_API_KEY or NANOBANANA_GEMINI_API_KEY must be set (the gemini CLI
-#   reads them itself; the script just verifies one is present).
+#   reads them itself; the script just verifies one is present). The script
+#   auto-sources ~/nsaf/.env if present so callers don't need a per-project
+#   .env — keys live at the nsaf monorepo root.
 #
 # Exit non-zero on any failure (no images generated, gemini missing, etc.).
 
 set -euo pipefail
+
+# Load NSAF env (single source of truth for API keys) if not already in scope.
+if [ -f "$HOME/nsaf/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$HOME/nsaf/.env"
+  set +a
+fi
 
 if [ "$#" -lt 3 ]; then
   echo "usage: $0 <output_png> <aspect 1:1|16:9> <prompt> [ref ...]" >&2
